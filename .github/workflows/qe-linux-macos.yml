@@ -1,0 +1,111 @@
+name: QE build (Linux & macOS)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-qe:
+    name: QE 7.5 build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-14 ]
+
+    env:
+      QE_VERSION: "qe-7.5"
+      QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
+      QE_SRC_DIR: "${{ runner.temp }}/q-e-src"
+      QE_PREFIX: "${{ runner.temp }}/qe-install"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            gfortran \
+            libopenblas-dev \
+            liblapack-dev \
+            libfftw3-dev \
+            wget \
+            make
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          brew update
+          brew install gcc gfortran fftw wget make
+
+          GCC_PREFIX=$(brew --prefix gcc)
+          GCC_VERSIONS=$(ls "$GCC_PREFIX/bin"/gcc-* 2>/dev/null | grep -E 'gcc-[0-9]+$' | sed 's/.*gcc-\([0-9]*\)$/\1/' | sort -rn || true)
+          if [ -n "$GCC_VERSIONS" ]; then
+            HIGHEST_VERSION=$(echo "$GCC_VERSIONS" | head -1)
+            echo "CC=$GCC_PREFIX/bin/gcc-$HIGHEST_VERSION" >> $GITHUB_ENV
+            echo "FC=$GCC_PREFIX/bin/gfortran-$HIGHEST_VERSION" >> $GITHUB_ENV
+          else
+            echo "CC=cc" >> $GITHUB_ENV
+            echo "FC=gfortran" >> $GITHUB_ENV
+          fi
+
+      - name: Download and unpack QE
+        run: |
+          mkdir -p "$QE_SRC_DIR"
+          cd "$(dirname "$QE_SRC_DIR")"
+          wget -q "$QE_TARBALL_URL" -O qe.tar.gz
+          tar -xzf qe.tar.gz
+          rm qe.tar.gz
+          EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
+          if [ -z "$EXTRACTED" ]; then
+            echo "Failed to find extracted QE source directory"
+            exit 1
+          fi
+          mv "$EXTRACTED" "$QE_SRC_DIR"
+
+      - name: Configure QE (Linux, OpenBLAS)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd "$QE_SRC_DIR"
+          ./configure \
+            F90=gfortran \
+            MPIF90=gfortran \
+            BLAS_LIBS="-lopenblas" \
+            LAPACK_LIBS="-lopenblas"
+
+      - name: Configure QE (macOS, Accelerate)
+        if: matrix.os == 'macos-14'
+        run: |
+          cd "$QE_SRC_DIR"
+          ./configure \
+            CC="${CC:-cc}" \
+            F90="${FC:-gfortran}" \
+            MPIF90="${FC:-gfortran}" \
+            BLAS_LIBS="-framework Accelerate" \
+            LAPACK_LIBS="-framework Accelerate"
+
+      - name: Build QE (pw.x only)
+        run: |
+          cd "$QE_SRC_DIR"
+          make pw -j2
+          ls -la PW/src/pw.x || (echo "pw.x not built" && exit 1)
+
+      - name: Package build artifacts
+        run: |
+          mkdir -p "$QE_PREFIX/bin"
+          cp "$QE_SRC_DIR"/PW/src/pw.x "$QE_PREFIX/bin/"
+          ls -R "$QE_PREFIX"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-${{ env.QE_VERSION }}-${{ matrix.os }}
+          path: ${{ env.QE_PREFIX }}
+
