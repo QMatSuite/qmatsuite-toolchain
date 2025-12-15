@@ -61,7 +61,7 @@ jobs:
 
       - name: Download and unpack QE
         run: |
-          mkdir -p "$QE_SRC_DIR"
+          mkdir -p "$(dirname "$QE_SRC_DIR")"
           cd "$(dirname "$QE_SRC_DIR")"
           wget -q "$QE_TARBALL_URL" -O qe.tar.gz
           tar -xzf qe.tar.gz
@@ -71,7 +71,12 @@ jobs:
             echo "Failed to find extracted QE source directory"
             exit 1
           fi
+          # Remove target if it exists, then rename extracted directory
+          rm -rf "$QE_SRC_DIR"
           mv "$EXTRACTED" "$QE_SRC_DIR"
+          echo "QE source extracted to: $QE_SRC_DIR"
+          ls -la "$QE_SRC_DIR" | head -20
+          test -f "$QE_SRC_DIR/configure" || (echo "configure script not found!" && exit 1)
 
       - name: Configure QE (Linux, OpenBLAS)
         if: matrix.os == 'ubuntu-latest'
