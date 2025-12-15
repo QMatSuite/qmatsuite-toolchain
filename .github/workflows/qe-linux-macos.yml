@@ -19,12 +19,15 @@ jobs:
     env:
       QE_VERSION: "qe-7.5"
       QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
-      QE_SRC_DIR: "${{ runner.temp }}/q-e-src"
-      QE_PREFIX: "${{ runner.temp }}/qe-install"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up build directories
+        run: |
+          echo "QE_SRC_DIR=$RUNNER_TEMP/q-e-src" >> $GITHUB_ENV
+          echo "QE_PREFIX=$RUNNER_TEMP/qe-install" >> $GITHUB_ENV
 
       - name: Install dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
