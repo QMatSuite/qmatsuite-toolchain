@@ -44,6 +44,7 @@ jobs:
             make
             tar
             wget
+            git
 
       - name: Set up build directories
         run: |
