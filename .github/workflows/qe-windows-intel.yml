@@ -23,7 +23,7 @@ jobs:
       QE_VERSION: "qe-7.5"
       QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
       # Unix-style paths for bash steps
-      QE_SRC_DIR_UNIX: "/c/q-e-src"
+      QE_SRC_DIR_UNIX: "/c/q-e-src/q-e-qe-7.5"
       QE_PREFIX_UNIX: "/c/qe-install"
       # Windows-style path for upload-artifact
       QE_PREFIX: "C:\\qe-install"
@@ -49,89 +49,7 @@ jobs:
         run: |
           set -e
           SRC_DIR="$QE_SRC_DIR_UNIX"
+          PARENT_DIR=$(dirname "$SRC_DIR")
 
           echo "QE_SRC_DIR_UNIX = $SRC_DIR"
-
-          # Prepare source directory
-          mkdir -p "$SRC_DIR"
-          cd /c
-
-          echo "Downloading QE tarball..."
-          curl -L "$QE_TARBALL_URL" -o qe.tar.gz
-
-          echo "Unpacking QE tarball..."
-          tar -xzf qe.tar.gz
-          rm qe.tar.gz
-
-          echo "Looking for extracted QE directory..."
-          EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
-          echo "EXTRACTED = $EXTRACTED"
-
-          if [ -z "$EXTRACTED" ]; then
-            echo "Failed to find extracted QE source directory"
-            find . -maxdepth 2 -type d
-            exit 1
-          fi
-
-          # Move into our fixed SRC_DIR
-          mv "$EXTRACTED" "$SRC_DIR"
-
-          echo "Contents of $SRC_DIR:"
-          ls -la "$SRC_DIR"
-
-      - name: Show compiler info
-        shell: bash
-        run: |
-          echo "FC=$FC"
-          which "$FC" || true
-          "$FC" -V || "$FC" --version || true
-
-      - name: Configure QE with Intel classic
-        shell: bash
-        run: |
-          set -e
-          SRC_DIR="$QE_SRC_DIR_UNIX"
-          cd "$SRC_DIR"
-
-          echo "Current directory:"
-          pwd
-          echo "Top-level contents:"
-          ls -la
-
-          if [ ! -f ./configure ]; then
-            echo "ERROR: configure script not found in $SRC_DIR"
-            exit 1
-          fi
-
-          # setup-fortran sets FC=ifort. Keep configure as simple as possible.
-          ./configure \
-            F90="$FC" \
-            MPIF90="$FC"
-
-      - name: Build QE (pw.x only)
-        shell: bash
-        run: |
-          set -e
-          SRC_DIR="$QE_SRC_DIR_UNIX"
-          cd "$SRC_DIR"
-          make pw -j2
-          ls -la PW/src/pw.x || (echo "pw.x not built" && exit 1)
-
-      - name: Package build artifacts
-        shell: bash
-        run: |
-          set -e
-          PREFIX_DIR="$QE_PREFIX_UNIX"
-          SRC_DIR="$QE_SRC_DIR_UNIX"
-
-          mkdir -p "$PREFIX_DIR/bin"
-          cp "$SRC_DIR/PW/src/pw.x" "$PREFIX_DIR/bin/"
-
-          echo "QE installation tree under $PREFIX_DIR:"
-          ls -R "$PREFIX_DIR"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qe-${{ env.QE_VERSION }}-windows-intel-classic
-          path: ${{ env.QE_PREFIX }}
+          echo "PARE
