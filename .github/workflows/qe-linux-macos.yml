@@ -8,9 +8,6 @@ on:
       - 'toolchains/quantum_espresso/linux/**'
       - 'toolchains/quantum_espresso/macos/**'
       - 'toolchains/quantum_espresso/README.md'
-      - 'toolchains/quantum_espresso/linux/**'
-      - 'toolchains/quantum_espresso/macos/**'
-      - 'docs/**'
   pull_request:
     branches: [ main ]
     paths:
@@ -18,7 +15,7 @@ on:
       - 'toolchains/quantum_espresso/linux/**'
       - 'toolchains/quantum_espresso/macos/**'
       - 'toolchains/quantum_espresso/README.md'
-      - 'docs/**'
+
 
 
 jobs:
@@ -111,6 +108,7 @@ jobs:
             CC="${CC:-cc}" \
             F90="${FC:-gfortran}" \
             MPIF90="${FC:-gfortran}" \
+            CPP="${CC:-cc} -E" \
             BLAS_LIBS="-framework Accelerate" \
             LAPACK_LIBS="-framework Accelerate"
 
