@@ -1,4 +1,4 @@
-name: QE build (Windows, MinGW-w64)
+name: QE build (Windows MinGW)
 
 on:
   push:
@@ -16,13 +16,8 @@ on:
 
 jobs:
   build-qe-windows-mingw:
-    name: QE 7.5 build (windows-latest, MinGW-w64)
+    name: QE 7.5 build (Windows MinGW)
     runs-on: windows-latest
-
-    # 所有 run 步骤在 MSYS2 shell 里执行
-    defaults:
-      run:
-        shell: msys2 {0}
 
     env:
       QE_VERSION: "qe-7.5"
@@ -32,147 +27,54 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up MSYS2 with MinGW-w64
+      - name: Set up MSYS2 (MINGW64)
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
-          install: >-
+          install: >
+            base-devel
+            git
+            wget
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-fortran
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-fftw
-            mingw-w64-x86_64-hdf5
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            make
-            tar
-            wget
-            git
+            mingw-w64-x86_64-pkg-config
+          path-type: minimal
 
-      - name: Set up build directories
+      - name: Prepare QE source tree
+        shell: msys2 {0}
         run: |
-          # 源码目录和安装前缀，用 /c/... 这种 MSYS 路径，后面 CMake 会用到
-          echo "QE_SRC_DIR=/c/q-e-src" >> $GITHUB_ENV
-          echo "QE_PREFIX=/c/qe-install" >> $GITHUB_ENV
+          set -e
 
-      - name: Download and unpack QE
-        run: |
-          mkdir -p "$(dirname "$QE_SRC_DIR")"
-          cd "$(dirname "$QE_SRC_DIR")"
+          QE_SRC_DIR_UNIX="$RUNNER_TEMP/q-e-src"
+          QE_PREFIX_UNIX="$RUNNER_TEMP/qe-install"
 
+          echo "QE_SRC_DIR=$QE_SRC_DIR_UNIX"   >> "$GITHUB_ENV"
+          echo "QE_PREFIX=$QE_PREFIX_UNIX"    >> "$GITHUB_ENV"
+
+          mkdir -p "$QE_SRC_DIR_UNIX"
+          cd "$RUNNER_TEMP"
+
+          echo "Downloading QE ${QE_VERSION}..."
           wget -q "$QE_TARBALL_URL" -O qe.tar.gz
+
+          echo "Unpacking..."
           tar -xzf qe.tar.gz
           rm qe.tar.gz
 
           EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
           if [ -z "$EXTRACTED" ]; then
             echo "Failed to find extracted QE source directory"
+            ls -la
             exit 1
           fi
 
-          # 统一挪到 $QE_SRC_DIR，后面对这个目录跑 CMake
-          rm -rf "$QE_SRC_DIR"
-          mv "$EXTRACTED" "$QE_SRC_DIR"
+          rm -rf "$QE_SRC_DIR_UNIX"
+          mv "$EXTRACTED" "$QE_SRC_DIR_UNIX"
 
-          echo "QE source extracted to: $QE_SRC_DIR"
-          ls -la "$QE_SRC_DIR" | head -20
-
-      - name: Configure QE with CMake (MinGW-w64, CPU-only)
-        run: |
-          set -e
-          cd "$QE_SRC_DIR"
-
-          echo "MSYSTEM=$MSYSTEM"
-          echo "MINGW_PREFIX=$MINGW_PREFIX"
-          echo "QE_PREFIX=$QE_PREFIX"
-
-          mkdir -p build
-
-          # 避免 MSYS2 把 -DCMAKE_INSTALL_PREFIX= 里的路径乱改
-          export MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX="
-
-          "${MINGW_PREFIX}/bin/cmake.exe" -Wno-dev \
-            -GNinja \
-            -DCMAKE_INSTALL_PREFIX="$QE_PREFIX" \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            \
-            # 对标 PKGBUILD，但关掉我们不需要的模块，避免 devxlib / FOX / plugins
-            -DQE_ENABLE_FOX=OFF \
-            -DQE_ENABLE_HDF5=OFF \
-            -DQE_ENABLE_OPENMP=ON \
-            -DQE_ENABLE_ENVIRON=OFF \
-            -DQE_ENABLE_LIBXC=OFF \
-            -DQE_ENABLE_MPI=OFF \
-            -DQE_ENABLE_TEST=OFF \
-            -DQE_ENABLE_PLUGINS="" \
-            -DQE_DEVICEXLIB_INTERNAL=OFF \
-            -DQE_FOX_INTERNAL=OFF \
-            -DQE_MBD_INTERNAL=OFF \
-            -DQE_WANNIER90_INTERNAL=OFF \
-            -DQE_FFTW_VENDOR="FFTW3" \
-            -DBLA_VENDOR=OpenBLAS \
-            -S "$QE_SRC_DIR" \
-            -B build
-
-          echo "CMake configuration finished."
-          echo "Top of CMake cache:"
-          sed -n '1,80p' build/CMakeCache.txt || true
-
-      - name: Build QE with CMake (pw.x)
-        run: |
-          set -e
-          cd "$QE_SRC_DIR"
-
-          # 不指定 target，和 PKGBUILD 一样，直接构建整个项目
-          "${MINGW_PREFIX}/bin/cmake.exe" --build build
-
-          echo "Built files under build/:"
-          find build -maxdepth 4 -type f | sort | head -200
-
-      - name: Package Windows artifacts
-        run: |
-          set -e
-          cd "$QE_SRC_DIR"
-
-          mkdir -p "$QE_PREFIX/bin"
-
-          # 尝试在 build 目录下找到 pw.x 可执行文件
-          PW_CANDIDATE=$(
-            find build -maxdepth 5 -type f \
-              \( -name "pw.x.exe" -o -name "pw.exe" -o -name "pw.x" \) \
-              | head -1
-          )
-
-          if [ -z "$PW_CANDIDATE" ]; then
-            echo "ERROR: pw.x executable not found in CMake build tree"
-            find build -maxdepth 5 -type f | sort | head -300
-            exit 1
-          fi
-
-          echo "Found pw.x candidate: $PW_CANDIDATE"
-
-          # 统一拷到 QE_PREFIX/bin，下游就只认这个路径
-          cp "$PW_CANDIDATE" "$QE_PREFIX/bin/pw.x.exe"
-
-          echo "Listing QE_PREFIX tree:"
-          find "$QE_PREFIX" -type f | sort
-
-          # 同时把运行依赖的 mingw DLL 也一起打包
-          echo "Copying required MinGW DLLs..."
-          cp /mingw64/bin/libopenblas*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
-          cp /mingw64/bin/libgfortran-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
-          cp /mingw64/bin/libquadmath-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
-          cp /mingw64/bin/libgcc_s_seh-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
-          cp /mingw64/bin/libwinpthread-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
-
-          echo "Final contents under $QE_PREFIX:"
-          find "$QE_PREFIX" -type f | sort
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: qe-${{ env.QE_VERSION }}-windows-mingw
-          path: C:\qe-install
+          echo "QE source in: $QE_SRC_DIR_UNIX"
+          ls -la "$QE_SRC_DIR_UNIX"
+          test -f "$QE_SRC_DIR_UNIX/configure" || (echo "conf
+::contentReference[oaicite:0]{index=0}
