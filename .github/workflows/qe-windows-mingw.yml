@@ -119,15 +119,32 @@ jobs:
           if [ -n "$TIMER_FILES" ]; then
             for TIMER_FILE in $TIMER_FILES; do
               if grep -q "#include <sys/times.h>" "$TIMER_FILE" 2>/dev/null && ! grep -q "_WIN32" "$TIMER_FILE" 2>/dev/null; then
-                echo "Applying manual fix to $TIMER_FILE (replacing sys/times.h with Windows-compatible headers)"
-                # Use awk for reliable multi-line replacement
+                echo "Applying manual fix to $TIMER_FILE (replacing sys/times.h with Windows-compatible implementation)"
+                # Use awk to replace sys/times.h include with Windows-compatible version
+                # This matches the MSYS2 patch approach: provide struct tms and times() stub for Windows
                 awk '{
                   if (/#include <sys\/times.h>/) {
-                    print "#ifdef _WIN32"
-                    print "#include <windows.h>"
-                    print "#include <time.h>"
-                    print "#else"
+                    print "#if !defined(_WIN32)"
                     print "#include <sys/times.h>"
+                    print "#else"
+                    print "#include <time.h>"
+                    print "/* Minimal struct tms + times() stub for Windows/MinGW."
+                    print "   Only used for timing, will not affect numerical correctness. */"
+                    print "struct tms {"
+                    print "  clock_t tms_utime;"
+                    print "  clock_t tms_stime;"
+                    print "  clock_t tms_cutime;"
+                    print "  clock_t tms_cstime;"
+                    print "};"
+                    print "static clock_t times(struct tms *buf) {"
+                    print "  if (buf) {"
+                    print "    buf->tms_utime  = 0;"
+                    print "    buf->tms_stime  = 0;"
+                    print "    buf->tms_cutime = 0;"
+                    print "    buf->tms_cstime = 0;"
+                    print "  }"
+                    print "  return (clock_t)clock();"
+                    print "}"
                     print "#endif"
                   } else {
                     print
