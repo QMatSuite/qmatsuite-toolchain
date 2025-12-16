@@ -166,7 +166,7 @@ jobs:
           set -e
           cd "$QE_SRC_DIR"
 
-          "${MINGW_PREFIX}/bin/cmake.exe" --build build --target pw.x
+          "${MINGW_PREFIX}/bin/cmake.exe" --build build --target pw
 
           echo "Build completed"
           echo "Looking for pw executable (patch 004 removes .x suffix on Windows)..."
