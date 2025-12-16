@@ -87,7 +87,7 @@ jobs:
           ls -la "$QE_SRC_DIR" | head -20
           test -f "$QE_SRC_DIR/CMakeLists.txt" || (echo "CMakeLists.txt not found" && exit 1)
 
-      - name: Apply MinGW compatibility patches
+      - name: Apply patches (before CMake)
         run: |
           set -e
           cd "$QE_SRC_DIR"
@@ -101,23 +101,12 @@ jobs:
             exit 1
           fi
 
-          # Apply patches in order (matching PKGBUILD: apply_patch_with_msg)
+          # Apply patch 001 only (patches 002-004 need files downloaded during CMake config)
           # -N: don't apply if already applied
           # -b: backup original files
           # -p1: strip first directory level from patch paths
           echo "Applying patch 001: use-srand-instead-of-srandom"
           patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch" || echo "Patch 001: may already be applied or failed (continuing)"
-
-          echo "Applying patch 002: fix-build-devxlib-on-mingw"
-          patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch" 2>&1 || echo "Patch 002: may already be applied or failed (will apply custom fix after CMake config)"
-
-          echo "Applying patch 003: fix-install-c-libraries"
-          patch -Nbp1 -i "$PATCH_DIR/003-fix-install-c-libraries.patch" || echo "Patch 003: may already be applied or failed (continuing)"
-
-          echo "Applying patch 004: fix-executable-suffix-on-mingw"
-          patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch" || echo "Patch 004: may already be applied or failed (will retry pw2qmcpack part after CMake config)"
-
-          echo "All patches processed"
 
       - name: Configure QE with CMake (MinGW + OpenBLAS + FFTW)
         run: |
@@ -160,77 +149,25 @@ jobs:
           echo "CMake cache (first 50 lines):"
           head -50 build/CMakeCache.txt || true
 
-      - name: Fix devxlib timer.c for Windows/MinGW
+      - name: Apply patches (after CMake, before build)
         run: |
           set -e
           cd "$QE_SRC_DIR"
-          
-          # Apply custom patch for sys/times.h fix (devxlib is downloaded during CMake config)
-          echo "Applying custom sys/times.h fix for Windows/MinGW..."
-          TIMER_FILES=$(find . -path "*/devxlib/src/timer.c" -o -path "*/devxlib/timer.c" 2>/dev/null || true)
-          
-          if [ -n "$TIMER_FILES" ]; then
-            for TIMER_FILE in $TIMER_FILES; do
-              if grep -q "^#include <sys/times.h>" "$TIMER_FILE" 2>/dev/null && ! grep -q "_WIN32" "$TIMER_FILE" 2>/dev/null; then
-                echo "Applying custom patch to $TIMER_FILE"
-                # Use awk to replace the line with the patched version
-                awk '
-                  /^#include <sys\/times.h>$/ {
-                    print "#if !defined(_WIN32)"
-                    print "#include <sys/times.h>"
-                    print "#else"
-                    print "#include <time.h>"
-                    print "/* Minimal struct tms + times() stub for Windows/MinGW."
-                    print "   Only used for timing, will not affect numerical correctness. */"
-                    print "struct tms {"
-                    print "  clock_t tms_utime;"
-                    print "  clock_t tms_stime;"
-                    print "  clock_t tms_cutime;"
-                    print "  clock_t tms_cstime;"
-                    print "};"
-                    print "static clock_t times(struct tms *buf) {"
-                    print "  if (buf) {"
-                    print "    buf->tms_utime  = 0;"
-                    print "    buf->tms_stime  = 0;"
-                    print "    buf->tms_cutime = 0;"
-                    print "    buf->tms_cstime = 0;"
-                    print "  }"
-                    print "  return (clock_t)clock();"
-                    print "}"
-                    print "#endif"
-                    next
-                  }
-                  { print }
-                ' "$TIMER_FILE" > "$TIMER_FILE.tmp" && mv "$TIMER_FILE.tmp" "$TIMER_FILE"
-                echo "Fixed $TIMER_FILE"
-                echo "Verifying fix:"
-                head -25 "$TIMER_FILE" || true
-              else
-                echo "$TIMER_FILE already has Windows guard or doesn't need fixing"
-              fi
-            done
-          else
-            echo "WARNING: No timer.c files found in devxlib"
-            echo "Searching for devxlib directories:"
-            find . -type d -name "devxlib" 2>/dev/null | head -5 || true
-          fi
 
-      - name: Apply patch 004 pw2qmcpack part (after CMake config)
-        run: |
-          set -e
-          cd "$QE_SRC_DIR"
-          
-          # Apply the pw2qmcpack part of patch 004 (file is downloaded during CMake config)
-          echo "Applying pw2qmcpack part of patch 004..."
+          # Apply patches 002-004 after CMake config (files are downloaded during CMake config)
           PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/patches"
           
-          if [ -f "external/pw2qmcpack/CMakeLists.txt" ]; then
-            echo "Found external/pw2qmcpack/CMakeLists.txt, retrying patch 004..."
-            # Re-apply patch 004 - it will skip files already patched and apply to pw2qmcpack
-            patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch" 2>&1 || echo "Patch 004 pw2qmcpack part: may already be applied"
-          else
-            echo "external/pw2qmcpack/CMakeLists.txt not found (may not be needed for this build)"
-          fi
+          # -N: don't apply if already applied
+          # -b: backup original files
+          # -p1: strip first directory level from patch paths
+          echo "Applying patch 002: fix-build-devxlib-on-mingw"
+          patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch" || echo "Patch 002: may already be applied or failed (continuing)"
+
+          echo "Applying patch 003: fix-install-c-libraries"
+          patch -Nbp1 -i "$PATCH_DIR/003-fix-install-c-libraries.patch" || echo "Patch 003: may already be applied or failed (continuing)"
+
+          echo "Applying patch 004: fix-executable-suffix-on-mingw"
+          patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch" || echo "Patch 004: may already be applied or failed (continuing)"
 
       - name: Build QE with CMake (pw.x)
         run: |
