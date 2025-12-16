@@ -74,15 +74,43 @@ jobs:
 
       - name: Configure QE with MinGW + OpenBLAS
         run: |
+          set -e
           cd "$QE_SRC_DIR"
-          ./configure \
+          
+          # Verify configure script exists
+          if [ ! -f ./configure ]; then
+            echo "ERROR: configure script not found!"
+            ls -la
+            exit 1
+          fi
+          
+          # Run configure and check exit status
+          if ! ./configure \
             F90=gfortran \
             MPIF90=gfortran \
             CC=gcc \
             CPP="gcc -E" \
             BLAS_LIBS="-lopenblas" \
-            LAPACK_LIBS="-lopenblas"
-
+            LAPACK_LIBS="-lopenblas"; then
+            echo "ERROR: configure failed!"
+            if [ -f configure.msg ]; then
+              echo "Configure error output:"
+              cat configure.msg
+            fi
+            exit 1
+          fi
+          
+          # Verify make.inc was created
+          if [ ! -f make.inc ]; then
+            echo "ERROR: make.inc was not created by configure!"
+            echo "Configure output:"
+            if [ -f configure.msg ]; then
+              cat configure.msg
+            fi
+            ls -la
+            exit 1
+          fi
+          
           echo "---- configure.msg (top) ----"
           if [ -f configure.msg ]; then
             head -100 configure.msg || true
@@ -90,6 +118,9 @@ jobs:
             echo "configure.msg not found, showing make.inc instead:"
             head -100 make.inc || true
           fi
+          
+          echo "---- make.inc (top) ----"
+          head -50 make.inc || true
 
       - name: Work around UtilXlib make.depend issue
         run: |
@@ -101,7 +132,16 @@ jobs:
 
       - name: Build QE
         run: |
+          set -e
           cd "$QE_SRC_DIR"
+          
+          # Verify make.inc exists before building
+          if [ ! -f make.inc ]; then
+            echo "ERROR: make.inc not found before build!"
+            ls -la
+            exit 1
+          fi
+          
           make libs -j2
           make pw -j2
 

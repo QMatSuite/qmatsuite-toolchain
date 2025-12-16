@@ -99,8 +99,9 @@ if [ ! -f "./make.inc" ]; then
 fi
 
 # Verify Accelerate framework is used (not OpenBLAS)
-if grep -qi "openblas" ./make.inc; then
-    echo "ERROR: make.inc contains OpenBLAS references. macOS must use Accelerate framework!"
+# Check LIBS line specifically (not comments) for OpenBLAS
+if grep -i "^[^#]*LIBS.*openblas" ./make.inc; then
+    echo "ERROR: make.inc LIBS contains OpenBLAS. macOS must use Accelerate framework!"
     exit 1
 fi
 if ! grep -q "Accelerate" ./make.inc; then

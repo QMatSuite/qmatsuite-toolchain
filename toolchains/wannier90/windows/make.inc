@@ -12,7 +12,8 @@ LDOPTS =
 
 # Libraries
 # Use OpenBLAS for BLAS/LAPACK on Windows (MinGW-w64)
-LIBS = -lopenblas -llapack
+# OpenBLAS includes both BLAS and LAPACK, so only link -lopenblas
+LIBS = -lopenblas
 
 # MPI support (commented out by default)
 # To enable parallel postw90:
