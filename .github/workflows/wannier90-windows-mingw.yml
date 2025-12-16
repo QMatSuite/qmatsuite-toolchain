@@ -37,14 +37,14 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
+            base-devel
+            git
+            wget
+            patch
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-gcc-fortran
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-fftw
-            make
-            tar
-            wget
-            git
 
       - name: Set up build directories
         run: |
