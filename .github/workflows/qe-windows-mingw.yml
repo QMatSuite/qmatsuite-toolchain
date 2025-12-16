@@ -43,7 +43,6 @@ jobs:
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-fftw
             mingw-w64-x86_64-hdf5
-            mingw-w64-x86_64-libomp
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             make
