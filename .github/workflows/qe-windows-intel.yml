@@ -85,7 +85,7 @@ jobs:
           which "$FC" || true
           "$FC" -V || "$FC" --version || true
 
-      - name: Configure QE with Intel classic (no -g)
+      - name: Configure QE with Intel classic (use -fpp, no -g)
         shell: bash
         run: |
           set -e
@@ -102,14 +102,16 @@ jobs:
             exit 1
           fi
 
-          # IMPORTANT: override QE defaults to avoid '-g' on Windows ifort,
-          # which is parsed as ambiguous '/g'. We don't need debug flags in CI.
+          # IMPORTANT:
+          # - Use -fpp instead of -cpp so ifort actually runs the preprocessor.
+          # - Drop -g because on Windows it turns into ambiguous '/g'.
+          # - Apply -fpp to both FFLAGS and F90FLAGS so .f/.f90 all see #if/#endif.
           ./configure \
             F90="$FC" \
             MPIF90="$FC" \
-            FFLAGS="-O3" \
-            F90FLAGS="-O3 -cpp" \
-            FFLAGS_NOOPT="-O0"
+            FFLAGS="-O3 -fpp" \
+            F90FLAGS="-O3 -fpp" \
+            FFLAGS_NOOPT="-O0 -fpp"
 
       - name: Build QE (pw.x only)
         shell: bash
