@@ -39,7 +39,6 @@ jobs:
         with:
           compiler: intel-classic
           version: '2021.10'
-          # no "cache" input here; action doesn't support it
 
       # We intentionally skip MS-MPI here.
       # Goal: get a working serial/OpenMP pw.x build first.
@@ -86,7 +85,7 @@ jobs:
           which "$FC" || true
           "$FC" -V || "$FC" --version || true
 
-      - name: Configure QE with Intel classic
+      - name: Configure QE with Intel classic (no -g)
         shell: bash
         run: |
           set -e
@@ -103,11 +102,14 @@ jobs:
             exit 1
           fi
 
-          # setup-fortran sets FC=ifort. Keep configure as simple as possible.
-          # Let QE's configure script choose BLAS/LAPACK (internal vs MKL) by itself.
+          # IMPORTANT: override QE defaults to avoid '-g' on Windows ifort,
+          # which is parsed as ambiguous '/g'. We don't need debug flags in CI.
           ./configure \
             F90="$FC" \
-            MPIF90="$FC"
+            MPIF90="$FC" \
+            FFLAGS="-O3" \
+            F90FLAGS="-O3 -cpp" \
+            FFLAGS_NOOPT="-O0"
 
       - name: Build QE (pw.x only)
         shell: bash
