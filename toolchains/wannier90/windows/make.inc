@@ -1,29 +1,25 @@
 # Wannier90 v3.1.0 make.inc for Windows (Intel Fortran Classic)
 # Based on make.inc.ifort template
 # IMPORTANT: Uses Intel Fortran Classic (ifort), NOT MinGW gfortran
+# Serial build by default (MPI disabled)
 
 # Compiler
 F90 = ifort
 
 # Compiler flags
-# Use -fpp for Intel Fortran preprocessor (equivalent to -cpp for gfortran)
-F90FLAGS = -O3 -fpp
-
-# Preprocessor
-CPP = ifort -fpp -E
-CPPFLAGS = 
-
-# Linker
-LDFLAGS = 
+# -fpp: use Fortran preprocessor (for consistency with QE Windows builds)
+FCOPTS = -O2 -fpp
+LDOPTS = -O2
 
 # Libraries
-# Use Intel MKL if available, otherwise use system BLAS/LAPACK
-# MKL is typically available with Intel oneAPI
-LIBS = -mkl
+# Use Intel MKL (sequential mode to avoid OpenMP conflicts)
+# If -mkl=sequential fails, fall back to explicit MKL libs using MKLROOT
+LIBS = -mkl=sequential
 
-# Parallel build support (optional)
-MPIF90 = mpiifort
-MPILIBS = 
+# MPI support (commented out by default)
+# To enable parallel postw90:
+# COMMS = mpi
+# MPIF90 = mpiifort
 
 # Installation (optional, used by 'make install')
 PREFIX = C:\wannier90

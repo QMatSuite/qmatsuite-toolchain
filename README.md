@@ -10,18 +10,18 @@ It is **not** meant to be used directly by end users. Instead:
   - the QMatSuite GUI, which will download and configure the right toolchains
 - This repo focuses on:
   - Building Quantum ESPRESSO (QE) on Linux, macOS, and Windows
-  - Later: building related tools such as Wannier90
+  - Building Wannier90 v3.1.0 on Linux, macOS, and Windows
 
 ## Layout
 
 - `toolchains/quantum_espresso/`
   - Platform-specific notes and scripts for QE
 - `toolchains/wannier90/`
-  - Reserved for Wannier90 build scripts (future)
+  - Platform-specific notes and scripts for Wannier90 v3.1.0
 - `docs/`
   - Additional documentation, notes, and design decisions
 - `.github/workflows/`
-  - GitHub Actions CI definitions for QE (and later other tools)
+  - GitHub Actions CI definitions for QE and Wannier90
 
 ## Status
 
@@ -31,6 +31,11 @@ Currently implemented:
   - `ubuntu-latest`
   - `macos-14`
   - `windows-latest` (Intel oneAPI + MKL, with MS-MPI installed)
+
+- Minimal CI builds of **Wannier90 v3.1.0** on:
+  - `ubuntu-latest` (serial build, system BLAS/LAPACK)
+  - `macos-14` (serial build, Apple Accelerate framework with -ff2c)
+  - `windows-latest` (serial build, Intel ifort classic + MKL)
 
 No binaries are published from this repo yet; it is intended as a backend for
 other QMatSuite projects.

@@ -1,28 +1,27 @@
 # Wannier90 v3.1.0 make.inc for macOS (GNU Fortran + Apple Accelerate)
-# Based on make.inc.macosx.homebrew template
-# IMPORTANT: Uses Apple Accelerate framework (NOT OpenBLAS)
+# Based on make.inc.macosx.macports template
+# IMPORTANT: Uses Apple Accelerate framework with -ff2c flag (NOT OpenBLAS)
+# Serial build by default (MPI disabled due to -ff2c/OpenMPI wrapper incompatibilities)
 
 # Compiler
 F90 = gfortran
+CC = cc
 
 # Compiler flags
-F90FLAGS = -O3 -g -fPIC -fmax-errors=1
-
-# Preprocessor
-CPP = cpp -P -C -traditional
-CPPFLAGS = 
-
-# Linker
-LDFLAGS = 
+# -ff2c is required for Accelerate framework compatibility
+FCOPTS = -O2 -ff2c
+LDOPTS = -O2 -ff2c
 
 # Libraries
 # MUST use Apple Accelerate framework for BLAS/LAPACK on macOS
 # Do NOT use OpenBLAS as the default
 LIBS = -framework Accelerate
 
-# Parallel build support (optional)
-MPIF90 = mpif90
-MPILIBS = 
+# MPI support (commented out by default)
+# WARNING: -ff2c can conflict with OpenMPI wrappers
+# To enable MPI, remove -ff2c from FCOPTS and LDOPTS first
+# COMMS = mpi
+# MPIF90 = mpif90
 
 # Installation (optional, used by 'make install')
 PREFIX = /usr/local

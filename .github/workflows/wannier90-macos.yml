@@ -5,14 +5,14 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/wannier90-macos.yml'
-      - 'toolchains/wannier90/macos/**'
       - 'toolchains/wannier90/README.md'
+      - 'toolchains/wannier90/macos/**'
   pull_request:
     branches: [ main ]
     paths:
       - '.github/workflows/wannier90-macos.yml'
-      - 'toolchains/wannier90/macos/**'
       - 'toolchains/wannier90/README.md'
+      - 'toolchains/wannier90/macos/**'
 
 jobs:
   build-wannier90:
@@ -21,109 +21,34 @@ jobs:
 
     env:
       W90_VERSION: "3.1.0"
-      W90_TARBALL_URL: "https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz"
+      W90_URL: "https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz"
+      W90_PREFIX: "${{ runner.temp }}/wannier90-install"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up build directories
-        run: |
-          echo "W90_SRC_DIR=$RUNNER_TEMP/wannier90-src" >> $GITHUB_ENV
-          echo "W90_PREFIX=$RUNNER_TEMP/wannier90-install" >> $GITHUB_ENV
-
       - name: Install dependencies (macOS)
         run: |
           brew update
-          brew install gcc gfortran wget make
+          brew install make wget curl
 
-          # Use Homebrew gcc/gfortran, but only bare names
-          BREW_GCC_VERSION=$(brew list --versions gcc | awk '{print $2}' | cut -d. -f1 || true)
+      - name: Setup Fortran compiler
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: latest
 
-          if [ -n "$BREW_GCC_VERSION" ]; then
-            echo "Using Homebrew gcc-$BREW_GCC_VERSION / gfortran-$BREW_GCC_VERSION"
-            echo "CC=gcc-$BREW_GCC_VERSION" >> "$GITHUB_ENV"
-            echo "FC=gfortran-$BREW_GCC_VERSION" >> "$GITHUB_ENV"
-          else
-            echo "Homebrew gcc version not detected, falling back to system compilers"
-            echo "CC=cc" >> "$GITHUB_ENV"
-            echo "FC=gfortran" >> "$GITHUB_ENV"
-          fi
-
-      - name: Download and unpack Wannier90
+      - name: Show compiler info
         run: |
-          mkdir -p "$(dirname "$W90_SRC_DIR")"
-          cd "$(dirname "$W90_SRC_DIR")"
-
-          if command -v wget &> /dev/null; then
-            wget -q "$W90_TARBALL_URL" -O wannier90.tar.gz
-          else
-            curl -L -s "$W90_TARBALL_URL" -o wannier90.tar.gz
-          fi
-
-          tar -xzf wannier90.tar.gz
-          rm wannier90.tar.gz
-
-          EXTRACTED=$(find . -maxdepth 1 -type d -name "wannier90-3.1.0*" | head -1)
-          if [ -z "$EXTRACTED" ]; then
-            echo "Failed to find extracted Wannier90 source directory"
-            exit 1
-          fi
-
-          rm -rf "$W90_SRC_DIR"
-          mv "$EXTRACTED" "$W90_SRC_DIR"
-
-          echo "Wannier90 source extracted to: $W90_SRC_DIR"
-          ls -la "$W90_SRC_DIR" | head -20
-          test -f "$W90_SRC_DIR/Makefile" || (echo "Makefile not found!" && exit 1)
-
-      - name: Configure Wannier90 (copy make.inc, verify Accelerate)
-        run: |
-          cd "$W90_SRC_DIR"
-          cp "$GITHUB_WORKSPACE/toolchains/wannier90/macos/make.inc" ./make.inc
-          test -f ./make.inc || (echo "make.inc not found!" && exit 1)
-
-          # Verify Accelerate framework is used (not OpenBLAS)
-          if grep -q "openblas" ./make.inc; then
-            echo "ERROR: make.inc contains OpenBLAS references. macOS must use Accelerate framework!"
-            exit 1
-          fi
-          if ! grep -q "Accelerate" ./make.inc; then
-            echo "ERROR: make.inc does not reference Accelerate framework!"
-            exit 1
-          fi
-
-          echo "make.inc contents:"
-          cat ./make.inc
+          echo "FC=$FC"
+          echo "CC=$CC"
+          ${FC:-gfortran} --version || true
+          which ${FC:-gfortran} || true
 
       - name: Build Wannier90
         run: |
-          cd "$W90_SRC_DIR"
-          make clean || true
-          make all F90="${FC:-gfortran}"
-          ls -la *.x || (echo "No .x executables found" && exit 1)
-
-      - name: Package build artifacts
-        run: |
-          mkdir -p "$W90_PREFIX/bin"
-          mkdir -p "$W90_PREFIX/share/wannier90"
-
-          # Copy executables
-          cp "$W90_SRC_DIR"/*.x "$W90_PREFIX/bin/" 2>/dev/null || true
-
-          # Copy documentation
-          if [ -f "$W90_SRC_DIR/README" ]; then
-            cp "$W90_SRC_DIR/README" "$W90_PREFIX/share/wannier90/"
-          fi
-          if [ -f "$W90_SRC_DIR/LICENSE" ]; then
-            cp "$W90_SRC_DIR/LICENSE" "$W90_PREFIX/share/wannier90/"
-          fi
-          if [ -f "$W90_SRC_DIR/LICENCE" ]; then
-            cp "$W90_SRC_DIR/LICENCE" "$W90_PREFIX/share/wannier90/LICENSE"
-          fi
-
-          echo "Wannier90 installation tree:"
-          ls -R "$W90_PREFIX"
+          bash toolchains/wannier90/macos/build.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

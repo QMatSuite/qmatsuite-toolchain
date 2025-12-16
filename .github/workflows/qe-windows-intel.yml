@@ -1,4 +1,4 @@
-name: QE build (Windows, Intel oneAPI via setup-fortran)
+name: QE build (Windows, Intel + .obj→.o wrapper)
 
 on:
   push:
@@ -22,140 +22,164 @@ jobs:
     env:
       QE_VERSION: "qe-7.5"
       QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
-      # Unix-style paths for bash steps
-      QE_SRC_DIR_UNIX: "/c/q-e-src/q-e-qe-7.5"
-      QE_PREFIX_UNIX: "/c/qe-install"
-      # Windows-style path for upload-artifact
-      QE_PREFIX: "C:\\qe-install"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Install Intel classic Fortran compiler (ifort) via setup-fortran.
-      - name: Setup Intel Fortran (classic) via setup-fortran
+      # 设置 QE_SRC_DIR / QE_PREFIX，统一用 /c/... 方便在 bash 里用
+      - name: Set up QE paths
+        shell: bash
+        run: |
+          echo "QE_SRC_DIR=/c/q-e-src" >> "$GITHUB_ENV"
+          echo "QE_PREFIX=/c/qe-install" >> "$GITHUB_ENV"
+
+      # 安装 Intel oneAPI Fortran（classic）编译器
+      - name: Setup Intel Fortran (classic)
         uses: fortran-lang/setup-fortran@v1
         with:
           compiler: intel-classic
           version: '2021.10'
+          update-environment: true
+          cache: true
 
-      - name: Download and unpack QE
-        shell: bash
-        run: |
-          set -e
-          SRC_DIR="$QE_SRC_DIR_UNIX"
-
-          echo "QE_SRC_DIR_UNIX = $SRC_DIR"
-
-          # Ensure parent directory exists
-          mkdir -p /c/q-e-src
-          cd /c
-
-          echo "Downloading QE tarball..."
-          curl -L "$QE_TARBALL_URL" -o qe.tar.gz
-
-          echo "Unpacking QE tarball..."
-          tar -xzf qe.tar.gz
-          rm qe.tar.gz
-
-          echo "Looking for extracted QE directory..."
-          EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
-          echo "EXTRACTED = $EXTRACTED"
-
-          if [ -z "$EXTRACTED" ]; then
-            echo "Failed to find extracted QE source directory"
-            find . -maxdepth 2 -type d
-            exit 1
-          fi
-
-          # Move into our fixed SRC_DIR (/c/q-e-src/q-e-qe-7.5)
-          mv "$EXTRACTED" "$SRC_DIR"
-
-          echo "Contents of $SRC_DIR:"
-          ls -la "$SRC_DIR"
-
-      - name: Show compiler info
+      - name: Show compilers
         shell: bash
         run: |
           echo "FC=$FC"
-          which "$FC" || true
-          "$FC" -V || "$FC" --version || true
+          echo "CC=$CC"
+          echo "CXX=$CXX"
+          command -v ifort  || echo "ifort not in PATH"
+          command -v icl    || echo "icl not in PATH"
+          command -v ar     || echo "ar not in PATH (will be needed by wrapper)"
 
-      - name: Configure QE with Intel classic (use -fpp, no -g)
+      - name: Download and unpack QE
         shell: bash
+        env:
+          QE_SRC_DIR: ${{ env.QE_SRC_DIR }}
+          QE_TARBALL_URL: ${{ env.QE_TARBALL_URL }}
         run: |
-          set -e
-          SRC_DIR="$QE_SRC_DIR_UNIX"
-          cd "$SRC_DIR"
+          echo "Using QE_SRC_DIR=$QE_SRC_DIR"
+          mkdir -p "$(dirname "$QE_SRC_DIR")"
+          cd "$(dirname "$QE_SRC_DIR")"
 
-          if [ ! -f ./configure ]; then
-            echo "ERROR: configure script not found in $SRC_DIR"
+          curl -L "$QE_TARBALL_URL" -o qe.tar.gz
+          tar -xzf qe.tar.gz
+          rm qe.tar.gz
+
+          EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
+          if [ -z "$EXTRACTED" ]; then
+            echo "Failed to find extracted QE source directory"
+            ls -la
             exit 1
           fi
 
-          # -fpp: use Fortran preprocessor (fix mpif.h / USE mpi / #if)
-          # drop -g to avoid ambiguous /g on Windows
-          ./configure \
-            F90="$FC" \
-            MPIF90="$FC" \
-            FFLAGS="-O3 -fpp" \
-            F90FLAGS="-O3 -fpp" \
-            FFLAGS_NOOPT="-O0 -fpp"
+          rm -rf "$QE_SRC_DIR"
+          mv "$EXTRACTED" "$QE_SRC_DIR"
 
-      - name: Build QE (pw.x only, no parallel make)
+          echo "QE source extracted to: $QE_SRC_DIR"
+          ls -la "$QE_SRC_DIR" | head -40
+          test -f "$QE_SRC_DIR/configure" || (echo "configure script not found!" && exit 1)
+
+      # 关键：AR wrapper，把当前目录的 .obj 全部重命名为 .o，再调用真正的 ar
+      - name: Prepare AR wrapper (.obj → .o)
         shell: bash
+        env:
+          QE_SRC_DIR: ${{ env.QE_SRC_DIR }}
         run: |
+          cd "$QE_SRC_DIR"
+          cat > ar-wrapper.sh << 'EOF'
+          #!/usr/bin/env bash
           set -e
-          SRC_DIR="$QE_SRC_DIR_UNIX"
+          # 确保没有 .obj 时不会出错
+          shopt -s nullglob
 
-          # Work around Windows/UtilXlib object suffix quirks:
-          # libutil.a's ar command lists these .o explicitly, but with icl
-          # some of them may be compiled as .obj. Ensure matching .o exist.
-          cd "$SRC_DIR/UtilXlib"
-
-          C_OBJS="clib_wrappers clocks_handler cptimer copy c_mkdir"
-
-          echo "Trying to build UtilXlib C objects: $C_OBJS"
-          # 尝试构建这些目标；有的 Makefile 规则可能叫 <name>.o，有的叫 <name>.obj。
-          for base in $C_OBJS; do
-            make -j1 "${base}.o" || true
-            make -j1 "${base}.obj" || true
-          done
-
-          echo "After C object build attempts, listing UtilXlib:"
-          ls -la
-
-          # 对每个 base，如果没有 .o 但有 .obj，就复制一份 .o 出来
-          for base in $C_OBJS; do
-            if [ ! -f "${base}.o" ] && [ -f "${base}.obj" ]; then
-              echo "Creating ${base}.o from ${base}.obj"
-              cp "${base}.obj" "${base}.o"
+          # 把当前目录下所有 .obj 重命名为同名 .o（仅当 .o 不存在时）
+          for obj in *.obj; do
+            [ -e "$obj" ] || continue
+            base="${obj%.obj}"
+            if [ ! -f "$base.o" ]; then
+              mv "$obj" "$base.o"
             fi
           done
 
-          echo "Final UtilXlib listing before main build:"
-          ls -la
+          # 调用真正的 ar（来自 Git for Windows / MinGW 等）
+          ar "$@"
+          EOF
 
-          # 回到顶层，串行构建 pw.x，避免额外 race condition
-          cd "$SRC_DIR"
-          make pw
-          ls -la PW/src/pw.x || (echo "pw.x not built" && exit 1)
+          chmod +x ar-wrapper.sh
+          echo "Created AR wrapper:"
+          sed -n '1,40p' ar-wrapper.sh
 
-      - name: Package build artifacts
+      - name: Configure QE (serial, Intel compilers)
         shell: bash
+        env:
+          QE_SRC_DIR: ${{ env.QE_SRC_DIR }}
         run: |
-          set -e
-          PREFIX_DIR="$QE_PREFIX_UNIX"
-          SRC_DIR="$QE_SRC_DIR_UNIX"
+          cd "$QE_SRC_DIR"
 
-          mkdir -p "$PREFIX_DIR/bin"
-          cp "$SRC_DIR/PW/src/pw.x" "$PREFIX_DIR/bin/"
+          # 使用 AR wrapper；不显式指定 BLAS/FFT，走 internal BLAS/LAPACK/FFTW
+          AR="$PWD/ar-wrapper.sh" \
+          ./install/configure \
+            F90=ifort \
+            MPIF90=ifort \
+            CC=icl
 
-          echo "QE installation tree under $PREFIX_DIR:"
-          ls -R "$PREFIX_DIR"
+          echo "---- make.inc (top) ----"
+          sed -n '1,80p' make.inc || true
+
+      # 跳过 GPU/devxlib（libcuda），避免 ./gcc 之类的奇怪调用
+      - name: Skip devxlib (libcuda)
+        shell: bash
+        env:
+          QE_SRC_DIR: ${{ env.QE_SRC_DIR }}
+        run: |
+          cd "$QE_SRC_DIR"
+          mkdir -p install
+          touch install/libcuda_devxlib
+          echo "Created install/libcuda_devxlib to skip devxlib build"
+
+      - name: Build QE (pw.x only)
+        shell: bash
+        env:
+          QE_SRC_DIR: ${{ env.QE_SRC_DIR }}
+        run: |
+          cd "$QE_SRC_DIR"
+
+          # 不要 -j 太大，避免 Windows 下奇怪竞态
+          make pw -j2
+
+          echo "Listing PW/src after build:"
+          ls -la PW/src
+
+      - name: Package pw.x.exe
+        shell: bash
+        env:
+          QE_SRC_DIR: ${{ env.QE_SRC_DIR }}
+          QE_PREFIX: ${{ env.QE_PREFIX }}
+        run: |
+          cd "$QE_SRC_DIR"
+
+          # 在 Windows 下，实际文件一般叫 pw.x.exe
+          if [ -f PW/src/pw.x.exe ]; then
+            BIN="PW/src/pw.x.exe"
+          elif [ -f PW/src/pw.x ]; then
+            BIN="PW/src/pw.x"
+          else
+            echo "pw.x[.exe] not found after build"
+            ls -la PW/src
+            exit 1
+          fi
+
+          mkdir -p "$QE_PREFIX/bin"
+          cp "$BIN" "$QE_PREFIX/bin/pw.x.exe"
+
+          echo "Installed files under $QE_PREFIX:"
+          ls -R "$QE_PREFIX" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qe-${{ env.QE_VERSION }}-windows-intel-classic
-          path: ${{ env.QE_PREFIX }}
+          name: qe-${{ env.QE_VERSION }}-windows-intel
+          # 注意：这里要用 Windows 风格路径
+          path: C:\qe-install

@@ -5,14 +5,14 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/wannier90-ubuntu.yml'
-      - 'toolchains/wannier90/linux/**'
       - 'toolchains/wannier90/README.md'
+      - 'toolchains/wannier90/linux/**'
   pull_request:
     branches: [ main ]
     paths:
       - '.github/workflows/wannier90-ubuntu.yml'
-      - 'toolchains/wannier90/linux/**'
       - 'toolchains/wannier90/README.md'
+      - 'toolchains/wannier90/linux/**'
 
 jobs:
   build-wannier90:
@@ -21,16 +21,12 @@ jobs:
 
     env:
       W90_VERSION: "3.1.0"
-      W90_TARBALL_URL: "https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz"
+      W90_URL: "https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz"
+      W90_PREFIX: "${{ runner.temp }}/wannier90-install"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up build directories
-        run: |
-          echo "W90_SRC_DIR=$RUNNER_TEMP/wannier90-src" >> $GITHUB_ENV
-          echo "W90_PREFIX=$RUNNER_TEMP/wannier90-install" >> $GITHUB_ENV
 
       - name: Install dependencies (Linux)
         run: |
@@ -38,69 +34,15 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             build-essential \
             gfortran \
-            libopenblas-dev \
-            liblapack-dev \
+            make \
             wget \
-            make
-
-      - name: Download and unpack Wannier90
-        run: |
-          mkdir -p "$(dirname "$W90_SRC_DIR")"
-          cd "$(dirname "$W90_SRC_DIR")"
-
-          wget -q "$W90_TARBALL_URL" -O wannier90.tar.gz
-          tar -xzf wannier90.tar.gz
-          rm wannier90.tar.gz
-
-          EXTRACTED=$(find . -maxdepth 1 -type d -name "wannier90-3.1.0*" | head -1)
-          if [ -z "$EXTRACTED" ]; then
-            echo "Failed to find extracted Wannier90 source directory"
-            exit 1
-          fi
-
-          rm -rf "$W90_SRC_DIR"
-          mv "$EXTRACTED" "$W90_SRC_DIR"
-
-          echo "Wannier90 source extracted to: $W90_SRC_DIR"
-          ls -la "$W90_SRC_DIR" | head -20
-          test -f "$W90_SRC_DIR/Makefile" || (echo "Makefile not found!" && exit 1)
-
-      - name: Configure Wannier90 (copy make.inc)
-        run: |
-          cd "$W90_SRC_DIR"
-          cp "$GITHUB_WORKSPACE/toolchains/wannier90/linux/make.inc" ./make.inc
-          test -f ./make.inc || (echo "make.inc not found!" && exit 1)
-          echo "make.inc contents:"
-          cat ./make.inc
+            curl \
+            libopenblas-dev \
+            liblapack-dev
 
       - name: Build Wannier90
         run: |
-          cd "$W90_SRC_DIR"
-          make clean || true
-          make all
-          ls -la *.x || (echo "No .x executables found" && exit 1)
-
-      - name: Package build artifacts
-        run: |
-          mkdir -p "$W90_PREFIX/bin"
-          mkdir -p "$W90_PREFIX/share/wannier90"
-
-          # Copy executables
-          cp "$W90_SRC_DIR"/*.x "$W90_PREFIX/bin/" 2>/dev/null || true
-
-          # Copy documentation
-          if [ -f "$W90_SRC_DIR/README" ]; then
-            cp "$W90_SRC_DIR/README" "$W90_PREFIX/share/wannier90/"
-          fi
-          if [ -f "$W90_SRC_DIR/LICENSE" ]; then
-            cp "$W90_SRC_DIR/LICENSE" "$W90_PREFIX/share/wannier90/"
-          fi
-          if [ -f "$W90_SRC_DIR/LICENCE" ]; then
-            cp "$W90_SRC_DIR/LICENCE" "$W90_PREFIX/share/wannier90/LICENSE"
-          fi
-
-          echo "Wannier90 installation tree:"
-          ls -R "$W90_PREFIX"
+          bash toolchains/wannier90/linux/build.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

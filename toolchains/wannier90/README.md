@@ -6,13 +6,13 @@ This directory contains platform-specific build scripts and configuration files 
 ## Version
 
 - **W90_VERSION**: 3.1.0
-- **Source tarball**: https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz
+- **W90_URL**: https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz
 
 ## Subdirectories
 
 - `linux/`   – build scripts and configuration for Linux (Ubuntu)
 - `macos/`   – build scripts and configuration for macOS
-- `windows/` – build scripts and configuration for Windows (Intel ifort)
+- `windows/` – build scripts and configuration for Windows (Intel ifort classic)
 
 ## Artifact Layout
 
@@ -23,32 +23,33 @@ prefix/
   bin/
     wannier90.x
     postw90.x
-    w90chk2chk.x
-    w90vdw.x
-    w90spn2spn.x
-    w90unk2unk.x
-    w90pov.x
   share/
     wannier90/
-      README
-      LICENSE
+      README.install (if available)
+      LICENSE (if available)
 ```
+
+## Build Configuration
+
+All builds are **serial by default** (no MPI). Parallel postw90 requires `COMMS=mpi` and `MPIF90` to be set, which is documented as a future extension.
 
 ## Platform-Specific Notes
 
 ### Linux
-- Uses OpenBLAS for BLAS/LAPACK
+- Uses system BLAS/LAPACK (`-llapack -lblas`)
 - Built with GNU Fortran (gfortran)
 - See `linux/README.md` for details
 
 ### macOS
 - **Must use Apple Accelerate framework** (`-framework Accelerate`) for BLAS/LAPACK
-- OpenBLAS is NOT used as the default on macOS
+- Uses `-ff2c` flag for Accelerate compatibility (as per macports template)
+- MPI is disabled by default due to potential incompatibilities with `-ff2c` and OpenMPI wrappers
 - Built with GNU Fortran (gfortran) from Homebrew
 - See `macos/README.md` for details
 
 ### Windows
 - Uses Intel Fortran Classic (ifort) from oneAPI
+- Uses Intel MKL (`-mkl=sequential`) for BLAS/LAPACK
 - MSYS2 may be used for build tools (make, tar, bash) but NOT for the compiler
 - MinGW gfortran is NOT used
 - See `windows/README.md` for details

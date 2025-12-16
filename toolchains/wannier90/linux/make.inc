@@ -1,26 +1,22 @@
-# Wannier90 v3.1.0 make.inc for Linux (GNU Fortran + OpenBLAS)
+# Wannier90 v3.1.0 make.inc for Linux (GNU Fortran)
 # Based on make.inc.gfort template
+# Serial build by default (MPI disabled)
 
 # Compiler
 F90 = gfortran
 
 # Compiler flags
-F90FLAGS = -O3 -g -fPIC -fmax-errors=1
-
-# Preprocessor
-CPP = cpp -P -C -traditional
-CPPFLAGS = 
-
-# Linker
-LDFLAGS = 
+FCOPTS = -O3
+LDOPTS = 
 
 # Libraries
-# Use OpenBLAS for BLAS/LAPACK on Linux
-LIBS = -lopenblas -llapack
+# Use system BLAS/LAPACK
+LIBS = -llapack -lblas
 
-# Parallel build support (optional)
-MPIF90 = mpif90
-MPILIBS = 
+# MPI support (commented out by default)
+# To enable parallel postw90:
+# COMMS = mpi
+# MPIF90 = mpif90
 
 # Installation (optional, used by 'make install')
 PREFIX = /usr/local
