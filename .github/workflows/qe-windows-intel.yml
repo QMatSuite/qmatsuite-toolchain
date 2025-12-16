@@ -93,6 +93,8 @@ jobs:
             exit 1
           fi
 
+          # -fpp: use Fortran preprocessor (fix mpif.h / USE mpi / #if)
+          # drop -g to avoid ambiguous /g on Windows
           ./configure \
             F90="$FC" \
             MPIF90="$FC" \
@@ -106,31 +108,35 @@ jobs:
           set -e
           SRC_DIR="$QE_SRC_DIR_UNIX"
 
-          # Work around Windows/UtilXlib quirk:
-          # libutil.a's ar command lists cptimer.o explicitly, but with icl
-          # the default object suffix is .obj. Make sure a cptimer.o exists.
+          # Work around Windows/UtilXlib object suffix quirks:
+          # libutil.a's ar command lists these .o explicitly, but with icl
+          # some of them may be compiled as .obj. Ensure matching .o exist.
           cd "$SRC_DIR/UtilXlib"
 
-          echo "Trying to build cptimer object..."
-          # Try to build a target named cptimer.o; if that fails or is a no-op,
-          # also try cptimer.obj, but don't fail the job here.
-          make -j1 cptimer.o || true
-          make -j1 cptimer.obj || true
+          C_OBJS="clib_wrappers clocks_handler cptimer copy c_mkdir"
 
-          echo "Listing UtilXlib after cptimer build:"
+          echo "Trying to build UtilXlib C objects: $C_OBJS"
+          # 尝试构建这些目标；有的 Makefile 规则可能叫 <name>.o，有的叫 <name>.obj。
+          for base in $C_OBJS; do
+            make -j1 "${base}.o" || true
+            make -j1 "${base}.obj" || true
+          done
+
+          echo "After C object build attempts, listing UtilXlib:"
           ls -la
 
-          if [ -f cptimer.o ]; then
-            echo "Found cptimer.o"
-          elif [ -f cptimer.obj ]; then
-            echo "Found cptimer.obj, copying to cptimer.o for ar"
-            cp cptimer.obj cptimer.o
-          else
-            echo "ERROR: Neither cptimer.o nor cptimer.obj exists in UtilXlib"
-            exit 1
-          fi
+          # 对每个 base，如果没有 .o 但有 .obj，就复制一份 .o 出来
+          for base in $C_OBJS; do
+            if [ ! -f "${base}.o" ] && [ -f "${base}.obj" ]; then
+              echo "Creating ${base}.o from ${base}.obj"
+              cp "${base}.obj" "${base}.o"
+            fi
+          done
 
-          # Now build pw.x normally (no -j to avoid further races).
+          echo "Final UtilXlib listing before main build:"
+          ls -la
+
+          # 回到顶层，串行构建 pw.x，避免额外 race condition
           cd "$SRC_DIR"
           make pw
           ls -la PW/src/pw.x || (echo "pw.x not built" && exit 1)
