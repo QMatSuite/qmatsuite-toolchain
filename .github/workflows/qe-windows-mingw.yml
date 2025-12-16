@@ -19,6 +19,7 @@ jobs:
     name: QE 7.5 build (windows-latest, MinGW-w64)
     runs-on: windows-latest
 
+    # 所有 run 步骤在 MSYS2 shell 里执行
     defaults:
       run:
         shell: msys2 {0}
@@ -41,6 +42,10 @@ jobs:
             mingw-w64-x86_64-gcc-fortran
             mingw-w64-x86_64-openblas
             mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-libomp
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
             make
             tar
             wget
@@ -48,6 +53,7 @@ jobs:
 
       - name: Set up build directories
         run: |
+          # 源码目录和安装前缀，用 /c/... 这种 MSYS 路径，后面 CMake 会用到
           echo "QE_SRC_DIR=/c/q-e-src" >> $GITHUB_ENV
           echo "QE_PREFIX=/c/qe-install" >> $GITHUB_ENV
 
@@ -66,111 +72,104 @@ jobs:
             exit 1
           fi
 
+          # 统一挪到 $QE_SRC_DIR，后面对这个目录跑 CMake
           rm -rf "$QE_SRC_DIR"
           mv "$EXTRACTED" "$QE_SRC_DIR"
 
           echo "QE source extracted to: $QE_SRC_DIR"
           ls -la "$QE_SRC_DIR" | head -20
-          test -f "$QE_SRC_DIR/configure" || (echo "configure script not found!" && exit 1)
 
-      - name: Configure QE with MinGW + OpenBLAS
+      - name: Configure QE with CMake (MinGW-w64, CPU-only)
         run: |
           set -e
           cd "$QE_SRC_DIR"
-          
-          # Verify configure script exists
-          if [ ! -f ./configure ]; then
-            echo "ERROR: configure script not found!"
-            ls -la
-            exit 1
-          fi
-          
-          # Run configure and check exit status
-          if ! ./configure \
-            F90=gfortran \
-            MPIF90=gfortran \
-            CC=gcc \
-            CPP="gcc -E" \
-            BLAS_LIBS="-lopenblas" \
-            LAPACK_LIBS="-lopenblas"; then
-            echo "ERROR: configure failed!"
-            if [ -f configure.msg ]; then
-              echo "Configure error output:"
-              cat configure.msg
-            fi
-            exit 1
-          fi
-          
-          # Verify make.inc was created
-          if [ ! -f make.inc ]; then
-            echo "ERROR: make.inc was not created by configure!"
-            echo "Configure output:"
-            if [ -f configure.msg ]; then
-              cat configure.msg
-            fi
-            ls -la
-            exit 1
-          fi
-          
-          echo "---- configure.msg (top) ----"
-          if [ -f configure.msg ]; then
-            head -100 configure.msg || true
-          else
-            echo "configure.msg not found, showing make.inc instead:"
-            head -100 make.inc || true
-          fi
-          
-          echo "---- make.inc (top) ----"
-          head -50 make.inc || true
 
-      - name: Work around UtilXlib make.depend issue
-        run: |
-          cd "$QE_SRC_DIR"
-          mkdir -p UtilXlib
-          printf '# empty depend file for CI\n' > UtilXlib/make.depend
-          echo "Created UtilXlib/make.depend:"
-          cat UtilXlib/make.depend
+          echo "MSYSTEM=$MSYSTEM"
+          echo "MINGW_PREFIX=$MINGW_PREFIX"
+          echo "QE_PREFIX=$QE_PREFIX"
 
-      - name: Build QE
+          mkdir -p build
+
+          # 避免 MSYS2 把 -DCMAKE_INSTALL_PREFIX= 里的路径乱改
+          export MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX="
+
+          "${MINGW_PREFIX}/bin/cmake.exe" -Wno-dev \
+            -GNinja \
+            -DCMAKE_INSTALL_PREFIX="$QE_PREFIX" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            \
+            # 对标 PKGBUILD，但关掉我们不需要的模块，避免 devxlib / FOX / plugins
+            -DQE_ENABLE_FOX=OFF \
+            -DQE_ENABLE_HDF5=OFF \
+            -DQE_ENABLE_OPENMP=ON \
+            -DQE_ENABLE_ENVIRON=OFF \
+            -DQE_ENABLE_LIBXC=OFF \
+            -DQE_ENABLE_MPI=OFF \
+            -DQE_ENABLE_TEST=OFF \
+            -DQE_ENABLE_PLUGINS="" \
+            -DQE_DEVICEXLIB_INTERNAL=OFF \
+            -DQE_FOX_INTERNAL=OFF \
+            -DQE_MBD_INTERNAL=OFF \
+            -DQE_WANNIER90_INTERNAL=OFF \
+            -DQE_FFTW_VENDOR="FFTW3" \
+            -DBLA_VENDOR=OpenBLAS \
+            -S "$QE_SRC_DIR" \
+            -B build
+
+          echo "CMake configuration finished."
+          echo "Top of CMake cache:"
+          sed -n '1,80p' build/CMakeCache.txt || true
+
+      - name: Build QE with CMake (pw.x)
         run: |
           set -e
           cd "$QE_SRC_DIR"
-          
-          # Verify make.inc exists before building
-          if [ ! -f make.inc ]; then
-            echo "ERROR: make.inc not found before build!"
-            ls -la
-            exit 1
-          fi
-          
-          # Build pw.x (this will automatically build required libraries)
-          make pw -j2
 
-          echo "Listing PW/src after build:"
-          ls -la PW/src
-          test -f PW/src/pw.x || (echo "pw.x not built" && exit 1)
+          # 不指定 target，和 PKGBUILD 一样，直接构建整个项目
+          "${MINGW_PREFIX}/bin/cmake.exe" --build build
+
+          echo "Built files under build/:"
+          find build -maxdepth 4 -type f | sort | head -200
 
       - name: Package Windows artifacts
         run: |
+          set -e
+          cd "$QE_SRC_DIR"
+
           mkdir -p "$QE_PREFIX/bin"
 
-          # Copy pw.x and rename to .exe
-          if [ -f "$QE_SRC_DIR/PW/src/pw.x" ]; then
-            cp "$QE_SRC_DIR/PW/src/pw.x" "$QE_PREFIX/bin/pw.x.exe"
-          else
-            echo "ERROR: pw.x not found"
+          # 尝试在 build 目录下找到 pw.x 可执行文件
+          PW_CANDIDATE=$(
+            find build -maxdepth 5 -type f \
+              \( -name "pw.x.exe" -o -name "pw.exe" -o -name "pw.x" \) \
+              | head -1
+          )
+
+          if [ -z "$PW_CANDIDATE" ]; then
+            echo "ERROR: pw.x executable not found in CMake build tree"
+            find build -maxdepth 5 -type f | sort | head -300
             exit 1
           fi
 
-          # Copy required DLLs from /mingw64/bin
-          echo "Copying required DLLs..."
+          echo "Found pw.x candidate: $PW_CANDIDATE"
+
+          # 统一拷到 QE_PREFIX/bin，下游就只认这个路径
+          cp "$PW_CANDIDATE" "$QE_PREFIX/bin/pw.x.exe"
+
+          echo "Listing QE_PREFIX tree:"
+          find "$QE_PREFIX" -type f | sort
+
+          # 同时把运行依赖的 mingw DLL 也一起打包
+          echo "Copying required MinGW DLLs..."
           cp /mingw64/bin/libopenblas*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
           cp /mingw64/bin/libgfortran-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
           cp /mingw64/bin/libquadmath-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
           cp /mingw64/bin/libgcc_s_seh-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
           cp /mingw64/bin/libwinpthread-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
 
-          echo "Installed files under $QE_PREFIX:"
+          echo "Final contents under $QE_PREFIX:"
           find "$QE_PREFIX" -type f | sort
 
       - name: Upload artifact
@@ -178,4 +177,3 @@ jobs:
         with:
           name: qe-${{ env.QE_VERSION }}-windows-mingw
           path: C:\qe-install
-
