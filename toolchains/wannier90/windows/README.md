@@ -88,6 +88,14 @@ To build Wannier90 on Windows locally using the same toolchain:
    ```
 4. Follow the CI workflow steps in `.github/workflows/wannier90-windows-mingw.yml`
 
+## Patches
+
+A patch from the [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-wannier90) is applied to fix executable suffix handling for Windows/MinGW builds. This patch is stored in `toolchains/wannier90/windows/patches/` and is automatically applied during the CI build process.
+
+The patch makes the executable suffix configurable via an `EXE_EXT` variable (defaults to `.x`), allowing flexibility in how executables are named on Windows.
+
+See `toolchains/wannier90/windows/patches/README.md` for details about the patch.
+
 ## Migration from Intel oneAPI
 
 This toolchain replaces the previous Intel oneAPI/ifort based Windows builds. The MinGW-w64 toolchain provides:
