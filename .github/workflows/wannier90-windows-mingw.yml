@@ -75,30 +75,11 @@ jobs:
 
       - name: Apply MinGW compatibility patch
         run: |
-          set -e
-          cd "$W90_SRC_DIR"
-          
-          # Navigate to workspace to get correct path context
-          cd "$GITHUB_WORKSPACE"
-          PATCH_FILE="toolchains/wannier90/windows/patches/001-fix-build-on-mingw.patch"
-          echo "Applying patch: $PATCH_FILE"
-          echo "Current directory: $(pwd)"
-          
-          # Verify patch file exists using relative path
-          if [ ! -f "$PATCH_FILE" ]; then
-            echo "ERROR: Patch file not found: $PATCH_FILE"
-            echo "Listing patches directory:"
-            ls -la toolchains/wannier90/windows/patches/ || true
-            exit 1
-          fi
-          
-          # Go back to source directory and apply patch using absolute path
           cd "$W90_SRC_DIR"
           # Apply patch with -p1 (strip first directory level from patch paths)
           # -N: don't apply if already applied
           # -b: backup original files
-          echo "Applying patch 001: fix-build-on-mingw"
-          patch -Nbp1 -i "$GITHUB_WORKSPACE/$PATCH_FILE" || echo "Patch 001: may already be applied or failed (continuing)"
+          patch -Nbp1 -i "$GITHUB_WORKSPACE/toolchains/wannier90/windows/patches/001-fix-build-on-mingw.patch" || echo "Patch may already be applied or failed (continuing)"
 
       - name: Configure Wannier90 (copy make.inc)
         run: |
