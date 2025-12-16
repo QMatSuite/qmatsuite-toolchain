@@ -148,10 +148,10 @@ jobs:
             -DQE_ENABLE_MPI=OFF \
             -DQE_ENABLE_TEST=OFF \
             -DQE_ENABLE_PLUGINS="" \
-            -DQE_DEVICEXLIB_INTERNAL=OFF \
+            -DQE_DEVICEXLIB_INTERNAL=ON \
             -DQE_FOX_INTERNAL=OFF \
             -DQE_MBD_INTERNAL=ON \
-            -DQE_WANNIER90_INTERNAL=OFF \
+            -DQE_WANNIER90_INTERNAL=ON \
             -DQE_FFTW_VENDOR="FFTW3" \
             -DBLA_VENDOR=OpenBLAS \
             -S "$QE_SRC_DIR" \

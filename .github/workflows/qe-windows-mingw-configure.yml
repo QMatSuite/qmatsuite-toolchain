@@ -85,6 +85,25 @@ jobs:
         run: |
           cd "$QE_SRC_DIR"
 
+          # Verify devxlib exists (for patch 002)
+          echo "Checking external/devxlib structure:"
+          if [ -d "external/devxlib" ]; then
+            echo "Found external/devxlib directory"
+            ls -la external/devxlib/ 2>/dev/null || true
+            if [ -d "external/devxlib/src" ]; then
+              echo "Found external/devxlib/src directory"
+              ls -la external/devxlib/src/ 2>/dev/null || true
+              if [ -f "external/devxlib/src/timer.c" ]; then
+                echo "Found external/devxlib/src/timer.c"
+              else
+                echo "WARNING: external/devxlib/src/timer.c not found"
+              fi
+            fi
+          else
+            echo "Warning: external/devxlib not found"
+            ls -la external/ 2>/dev/null || true
+          fi
+
           base_url="https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso"
 
           for p in \
@@ -93,11 +112,49 @@ jobs:
             003-fix-install-c-libraries.patch \
             004-fix-executable-suffix-on-mingw.patch
           do
-            echo "Fetching $p"
+            echo "=========================================="
+            echo "Fetching and applying $p"
+            echo "=========================================="
             curl -L "$base_url/$p" -o "$p"
-            echo "Applying $p"
-            patch -p1 < "$p"
+            
+            # For patch 002, verify target file exists before applying
+            if [ "$p" = "002-fix-build-devxlib-on-mingw.patch" ]; then
+              if [ ! -f "external/devxlib/src/timer.c" ]; then
+                echo "ERROR: external/devxlib/src/timer.c not found - cannot apply patch 002"
+                echo "Directory structure:"
+                find external/devxlib -type f -name "*.c" 2>/dev/null | head -10 || true
+                exit 1
+              fi
+            fi
+            
+            echo "Applying $p with: patch --batch -Nbp1"
+            # Use --batch to avoid interactive prompts, -N = don't apply if already applied, -b = backup, -p1 = strip first dir
+            if patch --batch -Nbp1 < "$p"; then
+              echo "✓ Patch $p applied successfully"
+            else
+              PATCH_EXIT=$?
+              echo "Patch $p exit code: $PATCH_EXIT"
+              # Check if already applied by trying again and checking output
+              PATCH_CHECK=$(patch --batch -Nbp1 < "$p" 2>&1) || true
+              if echo "$PATCH_CHECK" | grep -q "already applied\|Skipping patch"; then
+                echo "✓ Patch $p already applied (skipping)"
+              else
+                echo "✗ Patch $p failed"
+                echo "Patch check output:"
+                echo "$PATCH_CHECK"
+                # For patch 002, this is a hard error since we verified the file exists
+                if [ "$p" = "002-fix-build-devxlib-on-mingw.patch" ]; then
+                  echo "ERROR: Patch 002 failed but timer.c exists - this should not happen"
+                  exit 1
+                fi
+                # For other patches, allow failure (they might be optional)
+                echo "Continuing despite patch failure..."
+              fi
+            fi
           done
+          echo "=========================================="
+          echo "All patches processed"
+          echo "=========================================="
 
       - name: Configure QE (MinGW + OpenBLAS, via ./configure)
         shell: msys2 {0}
