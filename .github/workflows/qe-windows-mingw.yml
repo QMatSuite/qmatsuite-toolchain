@@ -150,7 +150,7 @@ jobs:
             -DQE_ENABLE_PLUGINS="" \
             -DQE_DEVICEXLIB_INTERNAL=OFF \
             -DQE_FOX_INTERNAL=OFF \
-            -DQE_MBD_INTERNAL=OFF \
+            -DQE_MBD_INTERNAL=ON \
             -DQE_WANNIER90_INTERNAL=OFF \
             -DQE_FFTW_VENDOR="FFTW3" \
             -DBLA_VENDOR=OpenBLAS \
