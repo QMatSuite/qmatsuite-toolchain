@@ -116,7 +116,7 @@ jobs:
           patch -Nbp1 -i "$PATCH_DIR/003.patch" || echo "Patch 003: may already be applied or failed (continuing)"
 
           echo "Applying patch 004: fix-executable-suffix-on-mingw"
-          patch -Nbp1 -i "$PATCH_DIR/004.patch" || echo "Patch 004: may already be applied or failed (continuing)"
+          patch -Nbp1 -i "$PATCH_DIR/004.patch" || echo "Patch 004: may already be applied or failed (will retry pw2qmcpack part after CMake config)"
 
           echo "All patches processed"
 
@@ -214,6 +214,23 @@ jobs:
             echo "WARNING: No timer.c files found in devxlib"
             echo "Searching for devxlib directories:"
             find . -type d -name "devxlib" 2>/dev/null | head -5 || true
+          fi
+
+      - name: Apply patch 004 pw2qmcpack part (after CMake config)
+        run: |
+          set -e
+          cd "$QE_SRC_DIR"
+          
+          # Apply the pw2qmcpack part of patch 004 (file is downloaded during CMake config)
+          echo "Applying pw2qmcpack part of patch 004..."
+          PATCH_DIR="/tmp/qe-patches"
+          
+          if [ -f "external/pw2qmcpack/CMakeLists.txt" ]; then
+            echo "Found external/pw2qmcpack/CMakeLists.txt, retrying patch 004..."
+            # Re-apply patch 004 - it will skip files already patched and apply to pw2qmcpack
+            patch -Nbp1 -i "$PATCH_DIR/004.patch" 2>&1 || echo "Patch 004 pw2qmcpack part: may already be applied"
+          else
+            echo "external/pw2qmcpack/CMakeLists.txt not found (may not be needed for this build)"
           fi
 
       - name: Build QE with CMake (pw.x)

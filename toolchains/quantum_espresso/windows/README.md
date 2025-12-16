@@ -67,6 +67,33 @@ To build QE on Windows locally using the same toolchain:
    ```
 4. Follow the CI workflow steps in `.github/workflows/qe-windows-mingw.yml`
 
+## Patch Application Notes
+
+### Patch 002 (devxlib timer.c fix)
+
+**Important**: Patch 002 must be applied **after** CMake configuration, not before. This is because:
+
+- The `external/devxlib/src/timer.c` file is downloaded/cloned during CMake configuration when `-DQE_DEVICEXLIB_INTERNAL=ON` is set
+- The file does not exist in the initial source tarball
+- Attempting to apply the patch before CMake configuration will fail with "can't find file to patch"
+
+The workflow handles this by:
+1. Attempting to apply patch 002 before CMake (may fail silently)
+2. Running CMake configuration (downloads devxlib)
+3. Applying a custom fix to `timer.c` after CMake configuration completes
+
+The custom fix replaces `#include <sys/times.h>` with a Windows-compatible version that provides `struct tms` and `times()` function stubs for MinGW.
+
+### Patch 004 (executable suffix fix)
+
+**Note**: Patch 004 partially applies before CMake configuration (to files that exist in the source tree), but the `external/pw2qmcpack/CMakeLists.txt` part must be applied **after** CMake configuration because:
+
+- The `external/pw2qmcpack/CMakeLists.txt` file is downloaded/cloned during CMake configuration
+- The file does not exist in the initial source tarball
+- The workflow re-applies patch 004 after CMake configuration to catch the pw2qmcpack file
+
+This ensures all CMakeLists.txt files are patched to handle Windows executable suffixes correctly.
+
 ## Migration from Intel oneAPI
 
 This toolchain replaces the previous Intel oneAPI/ifort/MS-MPI based Windows builds. The MinGW-w64 toolchain provides:
