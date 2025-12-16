@@ -87,36 +87,35 @@ jobs:
           ls -la "$QE_SRC_DIR" | head -20
           test -f "$QE_SRC_DIR/CMakeLists.txt" || (echo "CMakeLists.txt not found" && exit 1)
 
-      - name: Download and apply MinGW compatibility patches
+      - name: Apply MinGW compatibility patches
         run: |
           set -e
           cd "$QE_SRC_DIR"
 
-          # Download all patches from MSYS2 repository
-          echo "Downloading patches from MSYS2 repository..."
-          PATCH_DIR="/tmp/qe-patches"
-          mkdir -p "$PATCH_DIR"
+          # Use local patches from repository
+          PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/patches"
+          echo "Using patches from: $PATCH_DIR"
           
-          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/001-use-srand-instead-of-srandom.patch" -O "$PATCH_DIR/001.patch"
-          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/002-fix-build-devxlib-on-mingw.patch" -O "$PATCH_DIR/002.patch"
-          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/003-fix-install-c-libraries.patch" -O "$PATCH_DIR/003.patch"
-          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/004-fix-executable-suffix-on-mingw.patch" -O "$PATCH_DIR/004.patch"
+          if [ ! -d "$PATCH_DIR" ]; then
+            echo "ERROR: Patches directory not found: $PATCH_DIR"
+            exit 1
+          fi
 
           # Apply patches in order (matching PKGBUILD: apply_patch_with_msg)
           # -N: don't apply if already applied
           # -b: backup original files
           # -p1: strip first directory level from patch paths
           echo "Applying patch 001: use-srand-instead-of-srandom"
-          patch -Nbp1 -i "$PATCH_DIR/001.patch" || echo "Patch 001: may already be applied or failed (continuing)"
+          patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch" || echo "Patch 001: may already be applied or failed (continuing)"
 
           echo "Applying patch 002: fix-build-devxlib-on-mingw"
-          patch -Nbp1 -i "$PATCH_DIR/002.patch" 2>&1 || echo "Patch 002: may already be applied or failed (will apply custom fix after CMake config)"
+          patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch" 2>&1 || echo "Patch 002: may already be applied or failed (will apply custom fix after CMake config)"
 
           echo "Applying patch 003: fix-install-c-libraries"
-          patch -Nbp1 -i "$PATCH_DIR/003.patch" || echo "Patch 003: may already be applied or failed (continuing)"
+          patch -Nbp1 -i "$PATCH_DIR/003-fix-install-c-libraries.patch" || echo "Patch 003: may already be applied or failed (continuing)"
 
           echo "Applying patch 004: fix-executable-suffix-on-mingw"
-          patch -Nbp1 -i "$PATCH_DIR/004.patch" || echo "Patch 004: may already be applied or failed (will retry pw2qmcpack part after CMake config)"
+          patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch" || echo "Patch 004: may already be applied or failed (will retry pw2qmcpack part after CMake config)"
 
           echo "All patches processed"
 
@@ -223,12 +222,12 @@ jobs:
           
           # Apply the pw2qmcpack part of patch 004 (file is downloaded during CMake config)
           echo "Applying pw2qmcpack part of patch 004..."
-          PATCH_DIR="/tmp/qe-patches"
+          PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/patches"
           
           if [ -f "external/pw2qmcpack/CMakeLists.txt" ]; then
             echo "Found external/pw2qmcpack/CMakeLists.txt, retrying patch 004..."
             # Re-apply patch 004 - it will skip files already patched and apply to pw2qmcpack
-            patch -Nbp1 -i "$PATCH_DIR/004.patch" 2>&1 || echo "Patch 004 pw2qmcpack part: may already be applied"
+            patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch" 2>&1 || echo "Patch 004 pw2qmcpack part: may already be applied"
           else
             echo "external/pw2qmcpack/CMakeLists.txt not found (may not be needed for this build)"
           fi
