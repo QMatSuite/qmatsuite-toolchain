@@ -19,6 +19,10 @@ jobs:
     name: "QE 7.5 build (Windows MinGW)"
     runs-on: windows-latest
 
+    defaults:
+      run:
+        shell: msys2 {0}
+
     env:
       QE_VERSION: qe-7.5
       QE_TARBALL_URL: https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz
@@ -33,25 +37,34 @@ jobs:
           msystem: MINGW64
           update: true
           install: >
-            base-devel git wget
-            mingw-w64-x86_64-gcc mingw-w64-x86_64-gcc-fortran
-            mingw-w64-x86_64-openblas mingw-w64-x86_64-fftw
+            base-devel git wget patch
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-openblas
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-hdf5
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-omp
             mingw-w64-x86_64-pkg-config
-          path-type: minimal
 
       - name: Prepare QE source tree
-        shell: msys2 {0}
         run: |
           set -e
 
-          QE_SRC_DIR_UNIX="$RUNNER_TEMP/q-e-src"
-          QE_PREFIX_UNIX="$RUNNER_TEMP/qe-install"
+          # Use fixed paths (matching old workflow pattern)
+          QE_SRC_DIR="/c/q-e-src"
+          QE_PREFIX_UNIX="/c/qe-install"
+          QE_PREFIX_WIN="C:\\qe-install"
 
-          echo "QE_SRC_DIR=$QE_SRC_DIR_UNIX" >> "$GITHUB_ENV"
-          echo "QE_PREFIX=$QE_PREFIX_UNIX"  >> "$GITHUB_ENV"
+          echo "QE_SRC_DIR=$QE_SRC_DIR" >> "$GITHUB_ENV"
+          echo "QE_PREFIX=$QE_PREFIX_UNIX" >> "$GITHUB_ENV"
+          echo "QE_PREFIX_WIN=$QE_PREFIX_WIN" >> "$GITHUB_ENV"
+          
+          mkdir -p "$QE_SRC_DIR"
+          mkdir -p "$QE_PREFIX_UNIX"
 
-          mkdir -p "$QE_SRC_DIR_UNIX"
-          cd "$RUNNER_TEMP"
+          cd /c
 
           echo "Downloading QE tarball..."
           wget -q "$QE_TARBALL_URL" -O qe.tar.gz
@@ -67,54 +80,134 @@ jobs:
             exit 1
           fi
 
-          rm -rf "$QE_SRC_DIR_UNIX"
-          mv "$EXTRACTED" "$QE_SRC_DIR_UNIX"
+          rm -rf "$QE_SRC_DIR"
+          mv "$EXTRACTED" "$QE_SRC_DIR"
 
-          echo "QE source in $QE_SRC_DIR_UNIX"
-          ls -la "$QE_SRC_DIR_UNIX"
-          test -f "$QE_SRC_DIR_UNIX/configure" || (echo "configure script not found" && exit 1)
+          echo "QE source in $QE_SRC_DIR"
+          ls -la "$QE_SRC_DIR" | head -20
+          test -f "$QE_SRC_DIR/CMakeLists.txt" || (echo "CMakeLists.txt not found" && exit 1)
 
-      - name: Configure QE (MinGW + OpenBLAS + FFTW, no CUDA)
-        shell: msys2 {0}
+      - name: Download and apply MinGW compatibility patches
         run: |
           set -e
           cd "$QE_SRC_DIR"
 
-          ./configure \
-            F90=gfortran \
-            MPIF90=gfortran \
-            CC=gcc \
-            CXX=g++ \
-            CPP="gcc -E" \
-            BLAS_LIBS="-lopenblas" \
-            LAPACK_LIBS="-lopenblas" \
-            FFT_LIBS="-lfftw3" \
-            MANUAL_DFLAGS="-D_WIN32 -D__FFTW3" \
-            --with-cuda=no
+          # Download all patches from MSYS2 repository
+          echo "Downloading patches from MSYS2 repository..."
+          PATCH_DIR="/tmp/qe-patches"
+          mkdir -p "$PATCH_DIR"
+          
+          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/001-use-srand-instead-of-srandom.patch" -O "$PATCH_DIR/001.patch"
+          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/002-fix-build-devxlib-on-mingw.patch" -O "$PATCH_DIR/002.patch"
+          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/003-fix-install-c-libraries.patch" -O "$PATCH_DIR/003.patch"
+          wget -q "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/004-fix-executable-suffix-on-mingw.patch" -O "$PATCH_DIR/004.patch"
 
-          echo "configure finished; head of make.inc:"
-          sed -n '1,60p' make.inc || true
+          # Apply patches in order (matching PKGBUILD: apply_patch_with_msg)
+          # -N: don't apply if already applied
+          # -b: backup original files
+          # -p1: strip first directory level from patch paths
+          echo "Applying patch 001: use-srand-instead-of-srandom"
+          patch -Nbp1 -i "$PATCH_DIR/001.patch" || echo "Patch 001: may already be applied or failed (continuing)"
 
-      - name: Build QE (pw.x only)
-        shell: msys2 {0}
+          echo "Applying patch 002: fix-build-devxlib-on-mingw"
+          patch -Nbp1 -i "$PATCH_DIR/002.patch" || echo "Patch 002: may already be applied or failed (continuing)"
+
+          echo "Applying patch 003: fix-install-c-libraries"
+          patch -Nbp1 -i "$PATCH_DIR/003.patch" || echo "Patch 003: may already be applied or failed (continuing)"
+
+          echo "Applying patch 004: fix-executable-suffix-on-mingw"
+          patch -Nbp1 -i "$PATCH_DIR/004.patch" || echo "Patch 004: may already be applied or failed (continuing)"
+
+          echo "All patches processed"
+
+      - name: Configure QE with CMake (MinGW + OpenBLAS + FFTW)
         run: |
           set -e
           cd "$QE_SRC_DIR"
 
-          # Fortran module deps are fragile,先别 -j
-          make pw
+          # Prevent MSYS2 from converting CMAKE_INSTALL_PREFIX path
+          export MSYS2_ARG_CONV_EXCL="-DCMAKE_INSTALL_PREFIX="
 
-          echo "PW/src contents:"
-          ls -la PW/src || true
+          # Set FFLAGS to suppress warnings (as in PKGBUILD)
+          export FFLAGS=" -Wno-missing-include-dirs -w"
+          export CFLAGS=" -Wno-incompatible-pointer-types"
+
+          mkdir -p build
+
+          "${MINGW_PREFIX}/bin/cmake.exe" -Wno-dev \
+            -GNinja \
+            -DCMAKE_INSTALL_PREFIX="$QE_PREFIX" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DQE_ENABLE_FOX=OFF \
+            -DQE_ENABLE_HDF5=OFF \
+            -DQE_ENABLE_OPENMP=ON \
+            -DQE_ENABLE_ENVIRON=OFF \
+            -DQE_ENABLE_LIBXC=OFF \
+            -DQE_ENABLE_MPI=OFF \
+            -DQE_ENABLE_TEST=OFF \
+            -DQE_ENABLE_PLUGINS="" \
+            -DQE_DEVICEXLIB_INTERNAL=OFF \
+            -DQE_FOX_INTERNAL=OFF \
+            -DQE_MBD_INTERNAL=OFF \
+            -DQE_WANNIER90_INTERNAL=OFF \
+            -DQE_FFTW_VENDOR="FFTW3" \
+            -DBLA_VENDOR=OpenBLAS \
+            -S "$QE_SRC_DIR" \
+            -B build
+
+          echo "CMake configuration finished"
+          echo "CMake cache (first 50 lines):"
+          head -50 build/CMakeCache.txt || true
+
+      - name: Build QE with CMake (pw.x)
+        run: |
+          set -e
+          cd "$QE_SRC_DIR"
+
+          "${MINGW_PREFIX}/bin/cmake.exe" --build build --target pw.x
+
+          echo "Build completed"
+          echo "Looking for pw executable (patch 004 removes .x suffix on Windows)..."
+          find build -type f \( -name "pw" -o -name "pw.exe" -o -name "pw.x" -o -name "pw.x.exe" \) | head -10
+
+      - name: Package Windows artifacts
+        run: |
+          set -e
+          cd "$QE_SRC_DIR"
 
           mkdir -p "$QE_PREFIX/bin"
-          cp PW/src/pw.x "$QE_PREFIX/bin/"
 
-          echo "Install prefix:"
-          ls -R "$QE_PREFIX"
+          # Find pw executable (patch 004 removes .x suffix, so it may be "pw" or "pw.exe")
+          PW_EXE=$(find build -type f \( -name "pw" -o -name "pw.exe" -o -name "pw.x" -o -name "pw.x.exe" \) | head -1)
+
+          if [ -z "$PW_EXE" ]; then
+            echo "ERROR: pw executable not found"
+            echo "Searching build directory:"
+            find build -type f -name "*pw*" | head -20
+            exit 1
+          fi
+
+          echo "Found pw executable: $PW_EXE"
+          # Copy to bin with .exe extension for Windows
+          cp "$PW_EXE" "$QE_PREFIX/bin/pw.x.exe"
+
+          # Copy required DLLs from MinGW
+          echo "Copying required DLLs..."
+          cp /mingw64/bin/libopenblas*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libgfortran-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libquadmath-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libgcc_s_seh-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libwinpthread-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libomp*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libfftw3*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+
+          echo "Final package contents:"
+          find "$QE_PREFIX" -type f | sort
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: qe-${{ env.QE_VERSION }}-windows-mingw
-          path: ${{ env.QE_PREFIX }}
+          path: ${{ env.QE_PREFIX_WIN }}
