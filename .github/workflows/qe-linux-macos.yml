@@ -60,16 +60,7 @@ jobs:
           brew update
           brew install gcc gfortran fftw wget make
 
-          GCC_PREFIX=$(brew --prefix gcc)
-          GCC_VERSIONS=$(ls "$GCC_PREFIX/bin"/gcc-* 2>/dev/null | grep -E 'gcc-[0-9]+$' | sed 's/.*gcc-\([0-9]*\)$/\1/' | sort -rn || true)
-          if [ -n "$GCC_VERSIONS" ]; then
-            HIGHEST_VERSION=$(echo "$GCC_VERSIONS" | head -1)
-            echo "CC=$GCC_PREFIX/bin/gcc-$HIGHEST_VERSION" >> $GITHUB_ENV
-            echo "FC=$GCC_PREFIX/bin/gfortran-$HIGHEST_VERSION" >> $GITHUB_ENV
-          else
-            echo "CC=cc" >> $GITHUB_ENV
-            echo "FC=gfortran" >> $GITHUB_ENV
-          fi
+          
 
       - name: Download and unpack QE
         run: |
