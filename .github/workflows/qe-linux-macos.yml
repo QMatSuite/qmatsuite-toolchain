@@ -58,18 +58,29 @@ jobs:
         if: matrix.os == 'macos-14'
         run: |
           brew update
-          brew install gcc gfortran fftw wget make
+          brew install fftw wget make
 
-          GCC_PREFIX=$(brew --prefix gcc)
-          GCC_VERSIONS=$(ls "$GCC_PREFIX/bin"/gcc-* 2>/dev/null | grep -E 'gcc-[0-9]+$' | sed 's/.*gcc-\([0-9]*\)$/\1/' | sort -rn || true)
-          if [ -n "$GCC_VERSIONS" ]; then
-            HIGHEST_VERSION=$(echo "$GCC_VERSIONS" | head -1)
-            echo "CC=$GCC_PREFIX/bin/gcc-$HIGHEST_VERSION" >> $GITHUB_ENV
-            echo "FC=$GCC_PREFIX/bin/gfortran-$HIGHEST_VERSION" >> $GITHUB_ENV
-          else
-            echo "CC=cc" >> $GITHUB_ENV
-            echo "FC=gfortran" >> $GITHUB_ENV
-          fi
+      - name: Setup Fortran toolchain (macOS, Homebrew gcc)
+        if: matrix.os == 'macos-14'
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: 'latest'
+
+      - name: Derive matching CC from FC (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          echo "FC from setup-fortran: $FC"
+
+          # e.g. FC=/opt/homebrew/opt/gcc/bin/gfortran-14
+          FC_BASENAME=$(basename "$FC")          # gfortran-14
+          GCC_BASENAME=${FC_BASENAME/gfortran/gcc}  # gcc-14
+          GCC_DIR=$(dirname "$FC")               # /opt/homebrew/opt/gcc/bin
+          GCC_PATH="$GCC_DIR/$GCC_BASENAME"
+
+          echo "Using CC=$GCC_PATH to match FC=$FC"
+          echo "CC=$GCC_PATH" >> $GITHUB_ENV
+
 
       - name: Download and unpack QE
         run: |
