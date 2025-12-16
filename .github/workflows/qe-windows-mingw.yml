@@ -4,24 +4,24 @@ on:
   push:
     branches: [ main ]
     paths:
-      - '.github/workflows/qe-windows-mingw.yml'
-      - 'toolchains/quantum_espresso/windows/**'
-      - 'toolchains/quantum_espresso/README.md'
+      - ".github/workflows/qe-windows-mingw.yml"
+      - "toolchains/quantum_espresso/windows/**"
+      - "toolchains/quantum_espresso/README.md"
   pull_request:
     branches: [ main ]
     paths:
-      - '.github/workflows/qe-windows-mingw.yml'
-      - 'toolchains/quantum_espresso/windows/**'
-      - 'toolchains/quantum_espresso/README.md'
+      - ".github/workflows/qe-windows-mingw.yml"
+      - "toolchains/quantum_espresso/windows/**"
+      - "toolchains/quantum_espresso/README.md"
 
 jobs:
   build-qe-windows-mingw:
-    name: QE 7.5 build (Windows MinGW)
+    name: "QE 7.5 build (Windows MinGW)"
     runs-on: windows-latest
 
     env:
-      QE_VERSION: "qe-7.5"
-      QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
+      QE_VERSION: qe-7.5
+      QE_TARBALL_URL: https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz
 
     steps:
       - name: Checkout
@@ -33,13 +33,9 @@ jobs:
           msystem: MINGW64
           update: true
           install: >
-            base-devel
-            git
-            wget
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-gcc-fortran
-            mingw-w64-x86_64-openblas
-            mingw-w64-x86_64-fftw
+            base-devel git wget
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-openblas mingw-w64-x86_64-fftw
             mingw-w64-x86_64-pkg-config
           path-type: minimal
 
@@ -51,13 +47,13 @@ jobs:
           QE_SRC_DIR_UNIX="$RUNNER_TEMP/q-e-src"
           QE_PREFIX_UNIX="$RUNNER_TEMP/qe-install"
 
-          echo "QE_SRC_DIR=$QE_SRC_DIR_UNIX"   >> "$GITHUB_ENV"
-          echo "QE_PREFIX=$QE_PREFIX_UNIX"    >> "$GITHUB_ENV"
+          echo "QE_SRC_DIR=$QE_SRC_DIR_UNIX" >> "$GITHUB_ENV"
+          echo "QE_PREFIX=$QE_PREFIX_UNIX"  >> "$GITHUB_ENV"
 
           mkdir -p "$QE_SRC_DIR_UNIX"
           cd "$RUNNER_TEMP"
 
-          echo "Downloading QE ${QE_VERSION}..."
+          echo "Downloading QE tarball..."
           wget -q "$QE_TARBALL_URL" -O qe.tar.gz
 
           echo "Unpacking..."
@@ -74,7 +70,51 @@ jobs:
           rm -rf "$QE_SRC_DIR_UNIX"
           mv "$EXTRACTED" "$QE_SRC_DIR_UNIX"
 
-          echo "QE source in: $QE_SRC_DIR_UNIX"
+          echo "QE source in $QE_SRC_DIR_UNIX"
           ls -la "$QE_SRC_DIR_UNIX"
-          test -f "$QE_SRC_DIR_UNIX/configure" || (echo "conf
-::contentReference[oaicite:0]{index=0}
+          test -f "$QE_SRC_DIR_UNIX/configure" || (echo "configure script not found" && exit 1)
+
+      - name: Configure QE (MinGW + OpenBLAS + FFTW, no CUDA)
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd "$QE_SRC_DIR"
+
+          ./configure \
+            F90=gfortran \
+            MPIF90=gfortran \
+            CC=gcc \
+            CXX=g++ \
+            CPP="gcc -E" \
+            BLAS_LIBS="-lopenblas" \
+            LAPACK_LIBS="-lopenblas" \
+            FFT_LIBS="-lfftw3" \
+            MANUAL_DFLAGS="-D_WIN32 -D__FFTW3" \
+            --with-cuda=no
+
+          echo "configure finished; head of make.inc:"
+          sed -n '1,60p' make.inc || true
+
+      - name: Build QE (pw.x only)
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd "$QE_SRC_DIR"
+
+          # Fortran module deps are fragile,先别 -j
+          make pw
+
+          echo "PW/src contents:"
+          ls -la PW/src || true
+
+          mkdir -p "$QE_PREFIX/bin"
+          cp PW/src/pw.x "$QE_PREFIX/bin/"
+
+          echo "Install prefix:"
+          ls -R "$QE_PREFIX"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-${{ env.QE_VERSION }}-windows-mingw
+          path: ${{ env.QE_PREFIX }}
