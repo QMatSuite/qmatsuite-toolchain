@@ -90,11 +90,16 @@ To build Wannier90 on Windows locally using the same toolchain:
 
 ## Patches
 
-A patch from the [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-wannier90) is applied to fix executable suffix handling for Windows/MinGW builds. This patch is stored in `toolchains/wannier90/windows/patches/` and is automatically applied during the CI build process.
+A patch is available from the [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-wannier90) to fix executable suffix handling for Windows/MinGW builds. This patch is stored in `toolchains/wannier90/windows/patches/` but is **NOT currently used** in the CI workflow.
 
-The patch makes the executable suffix configurable via an `EXE_EXT` variable (defaults to `.x`), allowing flexibility in how executables are named on Windows.
+**Why the patch is not used:**
+The patch (`001-fix-build-on-mingw.patch`) makes the executable suffix configurable via an `EXE_EXT` variable, allowing building without the `.x` suffix. However, our workflow:
+1. Builds with the default `.x` suffix (which works without the patch)
+2. Renames executables to `.x.exe` in the packaging step
 
-See `toolchains/wannier90/windows/patches/README.md` for details about the patch.
+Since we're not using `EXE_EXT=` to build without the suffix, and we handle Windows naming in the packaging step, the patch is unnecessary.
+
+See `toolchains/wannier90/windows/patches/README.md` for details about the patch and why it's not applied.
 
 ## Migration from Intel oneAPI
 

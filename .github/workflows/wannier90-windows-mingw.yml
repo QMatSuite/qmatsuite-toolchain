@@ -73,14 +73,6 @@ jobs:
           ls -la "$W90_SRC_DIR" | head -20
           test -f "$W90_SRC_DIR/Makefile" || (echo "Makefile not found!" && exit 1)
 
-      - name: Apply MinGW compatibility patch
-        run: |
-          cd "$W90_SRC_DIR"
-          # Apply patch with -p1 (strip first directory level from patch paths)
-          # -N: don't apply if already applied
-          # -b: backup original files
-          patch -Nbp1 -i "$GITHUB_WORKSPACE/toolchains/wannier90/windows/patches/001-fix-build-on-mingw.patch" || echo "Patch may already be applied or failed (continuing)"
-
       - name: Configure Wannier90 (copy make.inc)
         run: |
           cd "$W90_SRC_DIR"

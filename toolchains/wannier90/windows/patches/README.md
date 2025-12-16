@@ -17,24 +17,38 @@ These patches are maintained by the MSYS2 project and are used in their official
 This patch fixes executable suffix handling in Wannier90 Makefiles for Windows/MinGW. It:
 
 - Adds an `EXE_EXT` variable (defaults to `.x`) that can be set to empty on Windows
-- Replaces hardcoded `.x` suffixes with `${EXE_EXT}` in Makefiles
-- Allows building executables without the `.x` suffix on Windows
+- Replaces hardcoded `.x` suffixes with `${EXE_EXT}` in Makefiles (`Makefile` and `src/Makefile.2`)
+- Updates all executable references to use the configurable suffix
+- Allows building executables without the `.x` suffix by setting `EXE_EXT=` when building
 
-**Current Status**: This patch is **currently applied** in the CI workflow (`.github/workflows/wannier90-windows-mingw.yml`) before building. The patch makes the executable suffix configurable via the `EXE_EXT` variable, which defaults to `.x`. The current build process uses the default `.x` suffix, so executables are built as `wannier90.x`, `postw90.x`, etc.
+**What the patch changes:**
+- In `Makefile`: Adds `EXE_EXT ?= .x` and replaces hardcoded `.x` in install and clean targets
+- In `src/Makefile.2`: Replaces all hardcoded `.x` suffixes in build rules with `${EXE_EXT}`
+
+**Current Status**: This patch is **NOT used** in the CI workflow (`.github/workflows/wannier90-windows-mingw.yml`).
+
+**Why it's not used:**
+The patch is unnecessary for our build process because:
+1. We build with the default `.x` suffix (which is what Wannier90 builds by default without the patch)
+2. The packaging step already handles Windows executable naming by:
+   - Finding all `.x` executables: `find "$W90_SRC_DIR" -maxdepth 1 -name "*.x"`
+   - Copying them to the bin directory
+   - Renaming them to `.x.exe` for Windows: `mv "$f" "${f}.exe"`
+
+Since we're not using `EXE_EXT=` to build without the suffix, and we rename executables in the packaging step anyway, the patch provides no benefit for our workflow.
 
 **Source**: [https://raw.githubusercontent.com/msys2/MINGW-packages/073221b97574014757ce5231e654f085cd6727dd/mingw-w64-wannier90/001-fix-build-on-mingw.patch](https://raw.githubusercontent.com/msys2/MINGW-packages/073221b97574014757ce5231e654f085cd6727dd/mingw-w64-wannier90/001-fix-build-on-mingw.patch)
 
 ## Usage
 
-This patch is automatically applied by the CI workflow (`.github/workflows/wannier90-windows-mingw.yml`) before building.
+If you want to use this patch (e.g., to build executables without the `.x` suffix), you can apply it manually:
 
-The patch is applied with:
 ```bash
 cd "$W90_SRC_DIR"
-patch -Np1 -i "$GITHUB_WORKSPACE/toolchains/wannier90/windows/patches/001-fix-build-on-mingw.patch"
+patch -Nbp1 -i "$GITHUB_WORKSPACE/toolchains/wannier90/windows/patches/001-fix-build-on-mingw.patch"
 ```
 
-By default, the build uses `EXE_EXT=.x` (the default value), so executables are built with the `.x` suffix. To build without the suffix, you can set `EXE_EXT=` when building:
+Then build with `EXE_EXT=` to create executables without the `.x` suffix:
 ```bash
 make EXE_EXT= wannier90 postw90
 ```
