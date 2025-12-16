@@ -12,7 +12,7 @@ This directory contains platform-specific build scripts and configuration files 
 
 - `linux/`   – build scripts and configuration for Linux (Ubuntu)
 - `macos/`   – build scripts and configuration for macOS
-- `windows/` – build scripts and configuration for Windows (Intel ifort classic)
+- `windows/` – build scripts and configuration for Windows (MinGW-w64 + gfortran)
 
 ## Artifact Layout
 
@@ -48,10 +48,9 @@ All builds are **serial by default** (no MPI). Parallel postw90 requires `COMMS=
 - See `macos/README.md` for details
 
 ### Windows
-- Uses Intel Fortran Classic (ifort) from oneAPI
-- Uses Intel MKL (`-mkl=sequential`) for BLAS/LAPACK
-- MSYS2 may be used for build tools (make, tar, bash) but NOT for the compiler
-- MinGW gfortran is NOT used
+- Uses MinGW-w64 gfortran compiler (via MSYS2)
+- Uses OpenBLAS for BLAS/LAPACK
+- MSYS2 provides the complete build toolchain
 - See `windows/README.md` for details
 
 ## CI Workflows
@@ -59,6 +58,6 @@ All builds are **serial by default** (no MPI). Parallel postw90 requires `COMMS=
 GitHub Actions workflows are located in `.github/workflows/`:
 - `wannier90-ubuntu.yml` – Linux builds
 - `wannier90-macos.yml` – macOS builds
-- `wannier90-windows-intel.yml` – Windows builds with Intel ifort
+- `wannier90-windows-mingw.yml` – Windows builds with MinGW-w64
 
 Each workflow is path-scoped to trigger only when its corresponding toolchain directory changes.

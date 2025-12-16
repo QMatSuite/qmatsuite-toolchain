@@ -63,9 +63,20 @@ if [ ! -d "${SRC_DIR}" ]; then
         exit 1
     fi
     
-    # Rename to fixed name if needed
-    if [ "${EXTRACTED}" != "${SRC_DIR}" ]; then
+    # Get absolute paths for comparison
+    EXTRACTED_ABS=$(cd "${EXTRACTED}" && pwd)
+    SRC_DIR_ABS=$(cd "${BUILD_DIR}" && pwd)/wannier90-${W90_VERSION}
+    
+    # Normalize paths (remove trailing slashes) for comparison
+    EXTRACTED_ABS="${EXTRACTED_ABS%/}"
+    SRC_DIR_ABS="${SRC_DIR_ABS%/}"
+    
+    # Only move if the extracted directory is not already at the target location
+    if [ "${EXTRACTED_ABS}" != "${SRC_DIR_ABS}" ]; then
+        echo "Moving extracted directory from ${EXTRACTED_ABS} to ${SRC_DIR_ABS}"
         mv "${EXTRACTED}" "${SRC_DIR}"
+    else
+        echo "Source already at target location: ${SRC_DIR_ABS}"
     fi
 fi
 

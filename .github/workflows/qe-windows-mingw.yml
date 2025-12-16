@@ -1,0 +1,140 @@
+name: QE build (Windows, MinGW-w64)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/qe-windows-mingw.yml'
+      - 'toolchains/quantum_espresso/windows/**'
+      - 'toolchains/quantum_espresso/README.md'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/qe-windows-mingw.yml'
+      - 'toolchains/quantum_espresso/windows/**'
+      - 'toolchains/quantum_espresso/README.md'
+
+jobs:
+  build-qe-windows-mingw:
+    name: QE 7.5 build (windows-latest, MinGW-w64)
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    env:
+      QE_VERSION: "qe-7.5"
+      QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 with MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-openblas
+            mingw-w64-x86_64-fftw
+            make
+            tar
+            wget
+
+      - name: Set up build directories
+        run: |
+          echo "QE_SRC_DIR=/c/q-e-src" >> $GITHUB_ENV
+          echo "QE_PREFIX=/c/qe-install" >> $GITHUB_ENV
+
+      - name: Download and unpack QE
+        run: |
+          mkdir -p "$(dirname "$QE_SRC_DIR")"
+          cd "$(dirname "$QE_SRC_DIR")"
+
+          wget -q "$QE_TARBALL_URL" -O qe.tar.gz
+          tar -xzf qe.tar.gz
+          rm qe.tar.gz
+
+          EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
+          if [ -z "$EXTRACTED" ]; then
+            echo "Failed to find extracted QE source directory"
+            exit 1
+          fi
+
+          rm -rf "$QE_SRC_DIR"
+          mv "$EXTRACTED" "$QE_SRC_DIR"
+
+          echo "QE source extracted to: $QE_SRC_DIR"
+          ls -la "$QE_SRC_DIR" | head -20
+          test -f "$QE_SRC_DIR/configure" || (echo "configure script not found!" && exit 1)
+
+      - name: Configure QE with MinGW + OpenBLAS
+        run: |
+          cd "$QE_SRC_DIR"
+          ./configure \
+            F90=gfortran \
+            MPIF90=gfortran \
+            CC=gcc \
+            CPP="gcc -E" \
+            BLAS_LIBS="-lopenblas" \
+            LAPACK_LIBS="-lopenblas"
+
+          echo "---- configure.msg (top) ----"
+          if [ -f configure.msg ]; then
+            head -100 configure.msg || true
+          else
+            echo "configure.msg not found, showing make.inc instead:"
+            head -100 make.inc || true
+          fi
+
+      - name: Work around UtilXlib make.depend issue
+        run: |
+          cd "$QE_SRC_DIR"
+          mkdir -p UtilXlib
+          printf '# empty depend file for CI\n' > UtilXlib/make.depend
+          echo "Created UtilXlib/make.depend:"
+          cat UtilXlib/make.depend
+
+      - name: Build QE
+        run: |
+          cd "$QE_SRC_DIR"
+          make libs -j2
+          make pw -j2
+
+          echo "Listing PW/src after build:"
+          ls -la PW/src
+          test -f PW/src/pw.x || (echo "pw.x not built" && exit 1)
+
+      - name: Package Windows artifacts
+        run: |
+          mkdir -p "$QE_PREFIX/bin"
+
+          # Copy pw.x and rename to .exe
+          if [ -f "$QE_SRC_DIR/PW/src/pw.x" ]; then
+            cp "$QE_SRC_DIR/PW/src/pw.x" "$QE_PREFIX/bin/pw.x.exe"
+          else
+            echo "ERROR: pw.x not found"
+            exit 1
+          fi
+
+          # Copy required DLLs from /mingw64/bin
+          echo "Copying required DLLs..."
+          cp /mingw64/bin/libopenblas*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libgfortran-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libquadmath-*.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libgcc_s_seh-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libwinpthread-1.dll "$QE_PREFIX/bin/" 2>/dev/null || true
+
+          echo "Installed files under $QE_PREFIX:"
+          find "$QE_PREFIX" -type f | sort
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-${{ env.QE_VERSION }}-windows-mingw
+          path: C:\qe-install
+

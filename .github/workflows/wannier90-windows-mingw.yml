@@ -1,0 +1,144 @@
+name: Wannier90 build (Windows, MinGW-w64)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/wannier90-windows-mingw.yml'
+      - 'toolchains/wannier90/windows/**'
+      - 'toolchains/wannier90/README.md'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/wannier90-windows-mingw.yml'
+      - 'toolchains/wannier90/windows/**'
+      - 'toolchains/wannier90/README.md'
+
+jobs:
+  build-wannier90-windows-mingw:
+    name: Wannier90 3.1.0 build (windows-latest, MinGW-w64)
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    env:
+      W90_VERSION: "3.1.0"
+      W90_TARBALL_URL: "https://github.com/wannier-developers/wannier90/archive/refs/tags/v3.1.0.tar.gz"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 with MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gcc-fortran
+            mingw-w64-x86_64-openblas
+            mingw-w64-x86_64-fftw
+            make
+            tar
+            wget
+
+      - name: Set up build directories
+        run: |
+          echo "W90_SRC_DIR=/c/wannier90-src" >> $GITHUB_ENV
+          echo "W90_PREFIX=/c/wannier90-install" >> $GITHUB_ENV
+
+      - name: Download and unpack Wannier90
+        run: |
+          mkdir -p "$(dirname "$W90_SRC_DIR")"
+          cd "$(dirname "$W90_SRC_DIR")"
+
+          wget -q "$W90_TARBALL_URL" -O wannier90.tar.gz
+          tar -xzf wannier90.tar.gz
+          rm wannier90.tar.gz
+
+          EXTRACTED=$(find . -maxdepth 1 -type d -name "wannier90-${W90_VERSION}*" | head -1)
+          if [ -z "$EXTRACTED" ]; then
+            echo "Failed to find extracted Wannier90 source directory"
+            exit 1
+          fi
+
+          rm -rf "$W90_SRC_DIR"
+          mv "$EXTRACTED" "$W90_SRC_DIR"
+
+          echo "Wannier90 source extracted to: $W90_SRC_DIR"
+          ls -la "$W90_SRC_DIR" | head -20
+          test -f "$W90_SRC_DIR/Makefile" || (echo "Makefile not found!" && exit 1)
+
+      - name: Configure Wannier90 (copy make.inc)
+        run: |
+          cd "$W90_SRC_DIR"
+          cp "$GITHUB_WORKSPACE/toolchains/wannier90/windows/make.inc" ./make.inc
+          test -f ./make.inc || (echo "make.inc not found!" && exit 1)
+          echo "make.inc contents:"
+          cat ./make.inc
+
+      - name: Build Wannier90
+        run: |
+          cd "$W90_SRC_DIR"
+          make clean || true
+          make -j2
+
+          echo "Built executables:"
+          ls -la *.x 2>/dev/null || true
+          test -f wannier90.x || (echo "wannier90.x not built" && exit 1)
+
+      - name: Package Windows artifacts
+        run: |
+          mkdir -p "$W90_PREFIX/bin"
+          mkdir -p "$W90_PREFIX/share/wannier90"
+
+          # Copy executables and rename to .exe
+          if [ -f "$W90_SRC_DIR/wannier90.x" ]; then
+            cp "$W90_SRC_DIR/wannier90.x" "$W90_PREFIX/bin/wannier90.x.exe"
+          fi
+          if [ -f "$W90_SRC_DIR/postw90.x" ]; then
+            cp "$W90_SRC_DIR/postw90.x" "$W90_PREFIX/bin/postw90.x.exe"
+          fi
+
+          # Copy any other .x executables
+          find "$W90_SRC_DIR" -maxdepth 1 -name "*.x" -type f -exec cp {} "$W90_PREFIX/bin/" \;
+          # Rename them to .exe
+          cd "$W90_PREFIX/bin"
+          for f in *.x; do
+            [ -f "$f" ] && mv "$f" "${f}.exe" || true
+          done
+
+          # Copy required DLLs from /mingw64/bin
+          echo "Copying required DLLs..."
+          cp /mingw64/bin/libopenblas*.dll "$W90_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libgfortran-*.dll "$W90_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libquadmath-*.dll "$W90_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libgcc_s_seh-1.dll "$W90_PREFIX/bin/" 2>/dev/null || true
+          cp /mingw64/bin/libwinpthread-1.dll "$W90_PREFIX/bin/" 2>/dev/null || true
+
+          # Copy documentation
+          if [ -f "$W90_SRC_DIR/README.install" ]; then
+            cp "$W90_SRC_DIR/README.install" "$W90_PREFIX/share/wannier90/"
+          fi
+          if [ -f "$W90_SRC_DIR/README" ]; then
+            cp "$W90_SRC_DIR/README" "$W90_PREFIX/share/wannier90/"
+          fi
+          if [ -f "$W90_SRC_DIR/LICENSE" ]; then
+            cp "$W90_SRC_DIR/LICENSE" "$W90_PREFIX/share/wannier90/"
+          fi
+          if [ -f "$W90_SRC_DIR/LICENCE" ]; then
+            cp "$W90_SRC_DIR/LICENCE" "$W90_PREFIX/share/wannier90/LICENSE"
+          fi
+
+          echo "Installed files under $W90_PREFIX:"
+          find "$W90_PREFIX" -type f | sort
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wannier90-${{ env.W90_VERSION }}-windows-mingw
+          path: C:\wannier90-install
+
