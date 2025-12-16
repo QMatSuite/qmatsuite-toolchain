@@ -113,13 +113,15 @@ jobs:
             F90FLAGS="-O3 -fpp" \
             FFLAGS_NOOPT="-O0 -fpp"
 
-      - name: Build QE (pw.x only)
+      - name: Build QE (pw.x only, no parallel make)
         shell: bash
         run: |
           set -e
           SRC_DIR="$QE_SRC_DIR_UNIX"
           cd "$SRC_DIR"
-          make pw -j2
+          # IMPORTANT: no "-j" here. Parallel build + fragile Windows deps
+          # can cause races like "cptimer.o: No such file or directory".
+          make pw
           ls -la PW/src/pw.x || (echo "pw.x not built" && exit 1)
 
       - name: Package build artifacts
