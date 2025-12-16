@@ -1,14 +1,23 @@
-name: QE build (Windows, Intel oneAPI)
+name: QE build (Windows, Intel oneAPI via setup-fortran)
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/qe-windows-intel.yml'
+      - 'toolchains/quantum_espresso/windows/**'
+      - 'toolchains/quantum_espresso/README.md'
+      - 'docs/**'
   pull_request:
     branches: [ main ]
-
+    paths:
+      - '.github/workflows/qe-windows-intel.yml'
+      - 'toolchains/quantum_espresso/windows/**'
+      - 'toolchains/quantum_espresso/README.md'
+      - 'docs/**'
 jobs:
   build-qe-windows-intel:
-    name: QE 7.5 build (windows-latest, Intel oneAPI + MKL)
+    name: QE 7.5 build (windows-latest, Intel classic + MKL)
     runs-on: windows-latest
 
     env:
@@ -21,15 +30,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Install Intel oneAPI Fortran compiler + MKL.
-      # This action installs the HPC toolkit and runs setvars for you.
-      - name: Setup Intel Fortran (oneAPI HPC)
-        uses: modflowpy/install-intelfortran-action@v1
+      # Use fortran-lang/setup-fortran to install Intel classic compiler (ifort) on Windows.
+      # This action handles downloading and installing oneAPI for us; no huge offline installer in-the-clear.
+      - name: Setup Intel Fortran (classic) via setup-fortran
+        uses: fortran-lang/setup-fortran@v1
         with:
-          setvars: true
-          cache: false
+          compiler: intel-classic
+          version: '2021.10'
 
-      # Install MS-MPI runtime + SDK (for future MPI builds / packaging).
+      # Optional: install MS-MPI runtime + SDK so we have mpiexec/smpd/msmpi.dll available.
       - name: Install MS-MPI (runtime + SDK)
         run: |
           choco install -y msmpi msmpisdk
@@ -51,20 +60,26 @@ jobs:
           fi
           mv "$EXTRACTED" "$(echo "$QE_SRC_DIR" | sed 's#C:#/c#')"
 
-      - name: Configure QE with Intel ifort + MKL
+      - name: Show compiler info
+        shell: bash
+        run: |
+          echo "FC=$FC"
+          "$FC" -V || "$FC" --version || true
+
+      - name: Configure QE with Intel classic + MKL
         shell: bash
         run: |
           set -e
           SRC_DIR="$(echo "$QE_SRC_DIR" | sed 's#C:#/c#')"
           cd "$SRC_DIR"
 
-          echo "Using Intel Fortran compiler: $FC (expected ifort)"
-          echo "MKLROOT=${MKLROOT:-undefined}"
-
-          # Basic configure using ifort. Let configure detect MKL via MKLROOT.
+          # setup-fortran sets FC to ifort and configures MKLROOT etc.
+          # Use -qmkl so the linker pulls in MKL automatically.
           ./configure \
-            F90="${FC:-ifort}" \
-            MPIF90="${FC:-ifort}"
+            F90="$FC" \
+            MPIF90="$FC" \
+            BLAS_LIBS="-qmkl" \
+            LAPACK_LIBS="-qmkl"
 
       - name: Build QE (pw.x only)
         shell: bash
@@ -91,6 +106,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qe-${{ env.QE_VERSION }}-windows-intel
+          name: qe-${{ env.QE_VERSION }}-windows-intel-classic
           path: ${{ env.QE_PREFIX }}
-

@@ -3,8 +3,23 @@ name: QE build (Linux & macOS)
 on:
   push:
     branches: [ main ]
+    paths:
+      - '.github/workflows/qe-linux-macos.yml'
+      - 'toolchains/quantum_espresso/linux/**'
+      - 'toolchains/quantum_espresso/macos/**'
+      - 'toolchains/quantum_espresso/README.md'
+      - 'toolchains/quantum_espresso/linux/**'
+      - 'toolchains/quantum_espresso/macos/**'
+      - 'docs/**'
   pull_request:
     branches: [ main ]
+    paths:
+      - '.github/workflows/qe-linux-macos.yml'
+      - 'toolchains/quantum_espresso/linux/**'
+      - 'toolchains/quantum_espresso/macos/**'
+      - 'toolchains/quantum_espresso/README.md'
+      - 'docs/**'
+
 
 jobs:
   build-qe:
