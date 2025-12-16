@@ -33,15 +33,11 @@ jobs:
         uses: actions/checkout@v4
 
       # Install Intel classic Fortran compiler (ifort) via setup-fortran.
-      # This will download an offline oneAPI installer (~1.5 GB) on the first run.
       - name: Setup Intel Fortran (classic) via setup-fortran
         uses: fortran-lang/setup-fortran@v1
         with:
           compiler: intel-classic
           version: '2021.10'
-
-      # We intentionally skip MS-MPI here: aim is a serial/OpenMP pw.x first.
-      # Later可以再加真正的 MPI toolchain.
 
       - name: Download and unpack QE
         shell: bash
@@ -92,20 +88,11 @@ jobs:
           SRC_DIR="$QE_SRC_DIR_UNIX"
           cd "$SRC_DIR"
 
-          echo "Current directory:"
-          pwd
-          echo "Top-level contents:"
-          ls -la
-
           if [ ! -f ./configure ]; then
             echo "ERROR: configure script not found in $SRC_DIR"
             exit 1
           fi
 
-          # IMPORTANT:
-          # - Use -fpp instead of -cpp so ifort actually runs the preprocessor.
-          # - Drop -g because on Windows it turns into ambiguous '/g'.
-          # - Apply -fpp to both FFLAGS and F90FLAGS so .f/.f90 all see #if/#endif.
           ./configure \
             F90="$FC" \
             MPIF90="$FC" \
@@ -120,11 +107,28 @@ jobs:
           SRC_DIR="$QE_SRC_DIR_UNIX"
 
           # Work around Windows/UtilXlib quirk:
-          # libutil.a's ar command lists cptimer.o explicitly, but in some
-          # environments it is not built before ar is called. Force-build it.
+          # libutil.a's ar command lists cptimer.o explicitly, but with icl
+          # the default object suffix is .obj. Make sure a cptimer.o exists.
           cd "$SRC_DIR/UtilXlib"
-          make -j1 cptimer.o
-          ls -la cptimer.o || (echo "cptimer.o missing after make" && exit 1)
+
+          echo "Trying to build cptimer object..."
+          # Try to build a target named cptimer.o; if that fails or is a no-op,
+          # also try cptimer.obj, but don't fail the job here.
+          make -j1 cptimer.o || true
+          make -j1 cptimer.obj || true
+
+          echo "Listing UtilXlib after cptimer build:"
+          ls -la
+
+          if [ -f cptimer.o ]; then
+            echo "Found cptimer.o"
+          elif [ -f cptimer.obj ]; then
+            echo "Found cptimer.obj, copying to cptimer.o for ar"
+            cp cptimer.obj cptimer.o
+          else
+            echo "ERROR: Neither cptimer.o nor cptimer.obj exists in UtilXlib"
+            exit 1
+          fi
 
           # Now build pw.x normally (no -j to avoid further races).
           cd "$SRC_DIR"

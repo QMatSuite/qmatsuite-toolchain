@@ -16,8 +16,6 @@ on:
       - 'toolchains/quantum_espresso/macos/**'
       - 'toolchains/quantum_espresso/README.md'
 
-
-
 jobs:
   build-qe:
     name: QE 7.5 build (${{ matrix.os }})
@@ -41,6 +39,8 @@ jobs:
           echo "QE_SRC_DIR=$RUNNER_TEMP/q-e-src" >> $GITHUB_ENV
           echo "QE_PREFIX=$RUNNER_TEMP/qe-install" >> $GITHUB_ENV
 
+      # ---------- Linux ----------
+
       - name: Install dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -54,52 +54,54 @@ jobs:
             wget \
             make
 
+      # ---------- macOS ----------
+
       - name: Install dependencies (macOS)
         if: matrix.os == 'macos-14'
         run: |
           brew update
-          brew install fftw wget make
+          brew install gcc gfortran fftw wget make
 
-      - name: Setup Fortran toolchain (macOS, Homebrew gcc)
-        if: matrix.os == 'macos-14'
-        uses: fortran-lang/setup-fortran@v1
-        with:
-          compiler: gcc
-          version: 'latest'
+          # Use Homebrew gcc/gfortran, but **only bare names**, no full paths.
+          # QE docs explicitly warn that passing full paths to compilers
+          # can lead to obscure build errors.
+          BREW_GCC_VERSION=$(brew list --versions gcc | awk '{print $2}' | cut -d. -f1 || true)
 
-      - name: Derive matching CC from FC (macOS)
-        if: matrix.os == 'macos-14'
-        run: |
-          echo "FC from setup-fortran: $FC"
+          if [ -n "$BREW_GCC_VERSION" ]; then
+            echo "Using Homebrew gcc-$BREW_GCC_VERSION / gfortran-$BREW_GCC_VERSION"
+            echo "CC=gcc-$BREW_GCC_VERSION" >> "$GITHUB_ENV"
+            echo "FC=gfortran-$BREW_GCC_VERSION" >> "$GITHUB_ENV"
+          else
+            echo "Homebrew gcc version not detected, falling back to system compilers"
+            echo "CC=cc" >> "$GITHUB_ENV"
+            echo "FC=gfortran" >> "$GITHUB_ENV"
+          fi
 
-          # e.g. FC=/opt/homebrew/opt/gcc/bin/gfortran-14
-          FC_BASENAME=$(basename "$FC")          # gfortran-14
-          GCC_BASENAME=${FC_BASENAME/gfortran/gcc}  # gcc-14
-          GCC_DIR=$(dirname "$FC")               # /opt/homebrew/opt/gcc/bin
-          GCC_PATH="$GCC_DIR/$GCC_BASENAME"
-
-          echo "Using CC=$GCC_PATH to match FC=$FC"
-          echo "CC=$GCC_PATH" >> $GITHUB_ENV
-
+      # ---------- Common: download QE ----------
 
       - name: Download and unpack QE
         run: |
           mkdir -p "$(dirname "$QE_SRC_DIR")"
           cd "$(dirname "$QE_SRC_DIR")"
+
           wget -q "$QE_TARBALL_URL" -O qe.tar.gz
           tar -xzf qe.tar.gz
           rm qe.tar.gz
+
           EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
           if [ -z "$EXTRACTED" ]; then
             echo "Failed to find extracted QE source directory"
             exit 1
           fi
-          # Remove target if it exists, then rename extracted directory
+
           rm -rf "$QE_SRC_DIR"
           mv "$EXTRACTED" "$QE_SRC_DIR"
+
           echo "QE source extracted to: $QE_SRC_DIR"
           ls -la "$QE_SRC_DIR" | head -20
           test -f "$QE_SRC_DIR/configure" || (echo "configure script not found!" && exit 1)
+
+      # ---------- Configure ----------
 
       - name: Configure QE (Linux, OpenBLAS)
         if: matrix.os == 'ubuntu-latest'
@@ -123,6 +125,8 @@ jobs:
             BLAS_LIBS="-framework Accelerate" \
             LAPACK_LIBS="-framework Accelerate"
 
+      # ---------- Build & package ----------
+
       - name: Build QE (pw.x only)
         run: |
           cd "$QE_SRC_DIR"
@@ -140,4 +144,3 @@ jobs:
         with:
           name: qe-${{ env.QE_VERSION }}-${{ matrix.os }}
           path: ${{ env.QE_PREFIX }}
-
