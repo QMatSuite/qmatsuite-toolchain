@@ -41,6 +41,17 @@ jobs:
           restore-keys: |
             qe-oneapi-${{ runner.os }}-
 
+      - name: Add Intel oneAPI Chocolatey feed
+        run: |
+          $name = "IntelOneAPI"
+          $src  = "https://intelparallelstudio-chocolatey-feed.azureedge.net/api/v2"
+          $exists = choco source list --allow-unofficial | Select-String $name
+          if (-not $exists) {
+            choco source add -n=$name -s=$src --priority=1
+          } else {
+            choco source enable -n=$name
+          }
+
       - name: Cache oneAPI install
         id: cache-oneapi
         uses: actions/cache@v4
@@ -55,7 +66,7 @@ jobs:
       - name: Install oneAPI (if needed)
         if: steps.cache-oneapi.outputs.cache-hit != 'true'
         run: |
-          choco install --no-progress -y intel-oneapi-basekit intel-oneapi-hpckit
+          choco install --no-progress -y --source=IntelOneAPI --pre intel-oneapi-basekit intel-oneapi-hpckit
 
       - name: Install build tools (cmake, ninja)
         run: |
