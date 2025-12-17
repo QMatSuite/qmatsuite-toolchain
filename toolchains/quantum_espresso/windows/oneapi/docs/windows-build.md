@@ -2,6 +2,8 @@
 
 This guide explains how to build Quantum ESPRESSO (QE) on Windows using Intel oneAPI compilers.
 
+**Note on toolchain scope:** This document specifically covers the Intel oneAPI toolchain for Windows. There is a separate MinGW/MSYS2-based Windows toolchain for Quantum ESPRESSO in this repository under `toolchains/quantum_espresso/windows/mingw`. That MinGW path uses gfortran and MS-MPI, is already working, and we plan to compare its performance with the Intel oneAPI + MKL path. MinGW-specific details are documented separately in that toolchain's documentation.
+
 ## Why Git Clone is Required
 
 **Important:** QE must be cloned from git, not downloaded as a zip archive. Here's why:
@@ -57,6 +59,157 @@ This repository uses a vendor/submodule approach:
    - Download from: https://git-scm.com/download/win
    - Or install via Chocolatey: `choco install git`
 
+## CI/CD Installation: oneAPI with MKL on Windows
+
+This section documents our experience installing Intel oneAPI HPC Toolkit (with MKL) in GitHub Actions Windows CI environments. The official oneAPI CI samples repository ([oneapi-src/oneapi-ci](https://github.com/oneapi-src/oneapi-ci)) and [documentation](https://oneapi-src.github.io/oneapi-ci/#intelr-oneapi-hpc-toolkit) provide component listings and installation methods, but we encountered several issues that required a specific approach.
+
+### What We Needed
+
+For Quantum ESPRESSO builds, we require:
+- **Intel Fortran compiler** (`ifx`/`ifort`) - Component ID: `intel.oneapi.win.ifort-compiler`
+- **Intel C++ compiler** (`icx`) - Component ID: `intel.oneapi.win.cpp-dpcpp-common`
+- **Intel MKL** (BLAS/LAPACK) - Component ID: `intel.oneapi.win.mkl.devel`
+
+The MKL component is critical; without it, CMake's `FindLAPACK` cannot locate BLAS/LAPACK libraries, causing build failures.
+
+### Installation Methods We Tried (and Why They Failed)
+
+#### 1. **winget (Windows Package Manager)** ❌
+
+**Attempt:**
+```powershell
+winget install Intel.oneAPI.HPCKit
+```
+
+**Why it failed:**
+- winget installs a minimal oneAPI installation that **does not include MKL**
+- The installed components are stripped down and missing critical libraries
+- CMake configuration fails with "LAPACK not found" errors
+- No way to specify which components to install via winget
+
+#### 2. **Chocolatey** ❌
+
+**Attempt:**
+```powershell
+choco install intel-oneapi-hpckit
+```
+
+**Why it failed:**
+- Similar to winget, Chocolatey packages often install minimal oneAPI distributions
+- MKL components are frequently missing or incomplete
+- Component selection is limited or non-existent
+
+#### 3. **Direct Installer with `--components` Flag** ❌
+
+**Attempt:**
+```powershell
+.\intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe --components intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.ifort-compiler:intel.oneapi.win.mkl.devel
+```
+
+**Why it failed:**
+- On Windows CI runners, the installer **hangs indefinitely** when using `--components` flag directly
+- The installer appears to start but never completes (waits forever)
+- This is a known issue with the oneAPI installer on Windows in automated environments
+- No timeout mechanism; the CI job hangs until manually cancelled
+
+#### 4. **Web Installer** ❌
+
+**Why it failed:**
+- Requires interactive GUI, not suitable for CI
+- Cannot be automated in headless environments
+
+### The Working Solution: Offline Installer with Config File ✅
+
+Based on the [oneAPI CI samples repository](https://github.com/oneapi-src/oneapi-ci) and community discussions, the solution is to:
+
+1. **Extract the offline installer** (silent extraction)
+2. **Create an installation config file** (`.ini` format) specifying components
+3. **Run the bootstrapper** with the config file (not the main installer)
+
+**Why this works:**
+- The bootstrapper (`bootstrapper.exe`) handles component selection reliably
+- The config file approach avoids the hanging issue with `--components` flag
+- Silent installation works in CI environments
+- All specified components (including MKL) are installed correctly
+
+**Implementation:**
+
+```powershell
+# 1. Download offline installer
+$url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/3a871580-f839-46ed-aeae-685084127279/intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
+$installerExe = "oneapi_hpc_installer.exe"
+Invoke-WebRequest -Uri $url -OutFile $installerExe
+
+# 2. Extract installer silently
+$extractDir = "oneapi_extracted"
+Start-Process -FilePath $installerExe -ArgumentList "-s", "-x", "-f", $extractDir -Wait
+
+# 3. Create config file
+$configFile = "oneapi_install_config.ini"
+@"
+eula=accept
+components=intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.ifort-compiler:intel.oneapi.win.mkl.devel
+p="NEED_VS2017_INTEGRATION=0 NEED_VS2019_INTEGRATION=0 NEED_VS2022_INTEGRATION=0"
+"@ | Out-File -FilePath $configFile
+
+# 4. Run bootstrapper with config file
+$bootstrapper = Join-Path $extractDir "bootstrapper.exe"
+$installLogDir = "install_logs"
+Start-Process -FilePath $bootstrapper -ArgumentList "--silent", "--eula", "accept", "--components", "intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.ifort-compiler:intel.oneapi.win.mkl.devel", "--log-dir", $installLogDir -Wait
+```
+
+**Key points:**
+- Component IDs must match exactly those listed in the [oneAPI CI documentation](https://oneapi-src.github.io/oneapi-ci/#intelr-oneapi-hpc-toolkit)
+- The `p="..."` parameter disables Visual Studio integration prompts (not needed in CI)
+- The bootstrapper approach is the only reliable method for automated Windows CI installation
+
+**Reference implementation:** See `.github/workflows/qe-windows-oneapi-mkl.yml` in this repository for a complete GitHub Actions workflow that implements this installation method with caching.
+
+### Caching for CI Performance
+
+Since oneAPI installation takes 20+ minutes, we cache both:
+1. **The installer download** (several GB) - cached in `.github/cache/oneapi-installer/`
+2. **The installed components** - cached in `C:\Program Files (x86)\Intel\oneAPI\`
+
+Cache keys include version numbers so updates trigger fresh installations:
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: |
+      C:\Program Files (x86)\Intel\oneAPI\compiler
+      C:\Program Files (x86)\Intel\oneAPI\mkl
+      C:\Program Files (x86)\Intel\oneAPI\setvars.bat
+    key: oneapi-install-2025.3.0-${{ runner.os }}-cpp-dpcpp-common-ifort-compiler-mkl-devel
+```
+
+### Component ID Reference
+
+From the [official oneAPI CI documentation](https://oneapi-src.github.io/oneapi-ci/#intelr-oneapi-hpc-toolkit), the correct component IDs for Windows HPC Toolkit 2025.3.0 are:
+
+| Component | ID | Provides |
+|-----------|-----|----------|
+| C++ Compiler | `intel.oneapi.win.cpp-dpcpp-common` | `icx`, `icpx`, `dpcpp` |
+| Fortran Compiler | `intel.oneapi.win.ifort-compiler` | `ifx`, `ifort` |
+| MKL Development | `intel.oneapi.win.mkl.devel` | MKL headers, libraries, CMake configs |
+
+**Important:** Use `intel.oneapi.win.mkl.devel` (not `intel.oneapi.win.mkl`) to get CMake package configs that `FindLAPACK` can locate.
+
+### Verifying Installation
+
+After installation, verify MKL is accessible:
+```powershell
+# Initialize oneAPI environment
+& "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64
+
+# Check MKLROOT is set
+echo $env:MKLROOT
+
+# Verify CMake can find MKL
+cmake -DCMAKE_PREFIX_PATH="$env:MKLROOT\lib\cmake\mkl" -P FindMKL.cmake
+```
+
+The installation should be at: `C:\Program Files (x86)\Intel\oneAPI\`
+
 ## Quick Start (end-to-end workflow)
 
 Order matters: refresh (clone) → apply patches → build → stage.
@@ -87,8 +240,9 @@ Notes:
 .\scripts\apply_qe_patches.ps1
 ```
 Notes:
-- Applies `qe-win-cmake-generation`, `qe-win-c-portability`, `qe-win-devxlib-timer` (and any future patches) to `upstream/qe`.
-- Idempotent: skips if already applied; fails if patch does not apply cleanly.
+- Applies `qe-win-cmake-generation` and `qe-win-c-portability` patches to `upstream/qe`.
+- Replaces `external/devxlib/src/timer.c` with Windows-compatible version from `patches/devxlib-timer.c`.
+- Idempotent: skips patches if already applied; file replacement always overwrites.
 
 ### Step 3: Build QE (oneAPI + Ninja)
 ```powershell
@@ -147,16 +301,112 @@ You should find:
 
 ## Windows patch workflow
 
-- QE upstream source is not committed; Windows fixes live as patches under `patches/`.
-- `scripts/refresh_qe_source.ps1` applies these patches automatically (opt-out: `-NoPatch`).
-- Manual apply (if you clone QE yourself):
-  ```powershell
-  .\scripts\apply_qe_patches.ps1 -QeDir upstream/qe -PatchDir patches
-  ```
-- Patch files:
-  - `qe-win-cmake-generation.patch` – CMake/build helpers, Fortran include preprocessing, git-rev generation
-  - `qe-win-c-portability.patch` – Windows portability fixes in C sources
-  - `qe-win-submodules.patch` – submodule pointer updates (external/d3q, external/devxlib)
+QE upstream source is not committed; Windows fixes live as patches under `patches/`. This repository carries small Windows-focused patches for the upstream QE sources.
+
+### Patch List
+
+- **`qe-win-cmake-generation.patch`**  
+  Makes QE CMake generation Windows-friendly by avoiding shell pipelines and using CMake scripting for git info and Fortran includes. Includes:
+  - CMake/build helpers
+  - Fortran include preprocessing without shell redirection
+  - Git revision header generation without sed/pipes
+
+- **`qe-win-c-portability.patch`**  
+  Adds Windows stubs and compatibility fixes for socket and math code. Includes:
+  - Windows socket implementation (`Modules/sockets.c`)
+  - Math constant definitions (`XClib/beefun.c`)
+
+- **`devxlib-timer.c`** (file replacement, not a patch)  
+  Complete file replacement for `external/devxlib/src/timer.c` with Windows-specific implementation using `QueryPerformanceCounter` instead of POSIX `gettimeofday()`. This replaces the original `qe-win-devxlib-timer.patch` approach (see "The `timer.c` Patching Struggle" below for details).
+
+### Timer.c File Reference
+
+The `patches/` directory contains reference files for the `timer.c` modification:
+
+- **`patches/reference/timer.c.original`** - The original Unix version from QE upstream that uses `gettimeofday()` (POSIX-only, doesn't work on Windows)
+- **`patches/devxlib-timer.c`** - The Windows-compatible replacement that uses `QueryPerformanceCounter` on Windows and falls back to `gettimeofday()` on Unix/Linux
+
+The patching script (`apply_qe_patches.ps1`) copies `patches/devxlib-timer.c` directly to `upstream/qe/external/devxlib/src/timer.c`, replacing the original file. The original is kept in `patches/reference/` for reference and comparison.
+
+### How to Apply Patches
+
+**Automatic (recommended):**
+```powershell
+.\scripts\refresh_qe_source.ps1
+```
+The refresh script applies patches automatically (opt-out with `-NoPatch`).
+
+**Manual apply (if you clone QE yourself):**
+```powershell
+.\scripts\apply_qe_patches.ps1 -QeDir upstream/qe -PatchDir patches
+```
+
+The patch script is **idempotent**: it skips patches already applied and stops if a patch cannot be applied cleanly.
+
+**Note on CI caching:** In CI environments (like GitHub Actions), the QE source directory is often cached. If the cached QE source already has patches applied, the script will detect this and skip re-applying them. The script checks for already-applied state first (before attempting to apply) to avoid confusing error messages. This is expected behavior and not an error.
+
+### Workflow Reminder
+
+The typical workflow is:
+1. **Clone QE source:** `scripts\refresh_qe_source.ps1` only cleans and clones QE (use `-NoPatch` to skip patching)
+2. **Apply patches:** Run `scripts\apply_qe_patches.ps1` to apply the Windows patches above
+3. **Build:** Use `scripts\build_qe_win_oneapi.ps1` (add `-NoMpi` for serial builds)
+
+### Reviewing Applied Patches
+
+To see what's been patched:
+```powershell
+cd upstream/qe
+git status
+git diff --stat
+```
+
+### The `timer.c` Patching Struggle
+
+The `external/devxlib/src/timer.c` file required Windows-specific changes to use `QueryPerformanceCounter` instead of Unix `gettimeofday()`. Our initial approach was to create a patch file (`qe-win-devxlib-timer.patch`), but this led to significant issues:
+
+#### Local Development Issues
+
+1. **Patch path problems:** The patch file initially had incorrect paths relative to the QE root directory
+2. **Line ending issues:** Windows vs Unix line endings (`CRLF` vs `LF`) caused patch application failures
+3. **Multiple rebuild attempts:** We rebuilt the patch multiple times with:
+   - Correct paths: `external/devxlib/src/timer.c` (relative to QE root)
+   - Normalized Unix line endings
+   - Verified with `git apply --check` from QE root
+
+**Local solution:** After fixing paths and line endings, the patch passed `git apply --check` and appeared to work locally.
+
+#### CI Failure
+
+Despite working locally, the patch **failed in GitHub Actions CI** with:
+```
+error: patch failed: external/devxlib/src/timer.c
+error: external/devxlib/src/timer.c: patch does not apply
+error: corrupted patch
+```
+
+**Root cause:** Even with normalized line endings and correct paths, the patch format itself was fragile. The CI environment's git configuration, line ending handling, or patch application mechanism differed from local development, causing the patch to be rejected as "corrupted."
+
+#### Final Solution: Complete File Replacement
+
+Rather than continuing to fight with patch format issues, we switched to a **complete file replacement** approach:
+
+1. **Removed the patch file:** Deleted `patches/qe-win-devxlib-timer.patch`
+2. **Preserved original for reference:** Moved the original Unix version to `patches/reference/timer.c.original`
+3. **Created replacement file:** Added `patches/devxlib-timer.c` containing the complete Windows-compatible implementation (uses `QueryPerformanceCounter` on Windows, `gettimeofday()` on Unix)
+4. **Updated patch script:** Modified `apply_qe_patches.ps1` to copy the replacement file directly:
+   ```powershell
+   Copy-Item -Path "$PatchDir\devxlib-timer.c" -Destination "$QeDir\external\devxlib\src\timer.c" -Force
+   ```
+
+**Why this works:**
+- No patch format to parse or apply
+- No line ending issues (PowerShell handles file copying correctly)
+- Works identically in local development and CI
+- Simpler and more reliable than patching
+
+**Lesson learned:** For complete file replacements (especially small files), direct file copying is more reliable than patch files in CI environments where patch application can be sensitive to git configuration, line endings, and environment differences.
+
 - Always clone QE via git with submodules:
   ```powershell
   git clone --recursive https://github.com/QEF/q-e.git
@@ -222,7 +472,7 @@ These are the key fixes that made the Windows/oneAPI CMake flow reliable:
 
 - **Windows source fixes (already in tree)**  
   - `Modules/sockets.c` uses Winsock headers on Windows.  
-  - `external/devxlib/src/timer.c` uses `GetSystemTimeAsFileTime`.  
+  - `external/devxlib/src/timer.c` uses `QueryPerformanceCounter` for high-resolution timing on Windows.  
   - `XClib/beefun.c` defines `M_PI` and includes `<math.h>`.
 
 - **Clean configure/build re-entry**  
@@ -289,6 +539,43 @@ Or download from https://github.com/ninja-build/ninja/releases and add to PATH.
 
 Then run the build script again.
 
+### "LAPACK not found" or "MKL not found" in CMake
+
+**Cause:** Intel MKL was not installed or CMake cannot locate it.
+
+**Solutions:**
+1. **Verify MKL is installed:**
+   ```powershell
+   Test-Path "C:\Program Files (x86)\Intel\oneAPI\mkl\latest"
+   ```
+
+2. **Check component installation:** If using CI/automated installation, ensure you used the bootstrapper method with config file (see "CI/CD Installation" section above). winget/Chocolatey installations often exclude MKL.
+
+3. **Set MKLROOT and CMAKE_PREFIX_PATH:**
+   ```powershell
+   $env:MKLROOT = "C:\Program Files (x86)\Intel\oneAPI\mkl\latest"
+   $env:CMAKE_PREFIX_PATH = "$env:MKLROOT\lib\cmake\mkl;$env:CMAKE_PREFIX_PATH"
+   ```
+
+4. **Verify CMake can find MKL:**
+   ```powershell
+   cmake -DCMAKE_PREFIX_PATH="$env:MKLROOT\lib\cmake\mkl" -P FindMKL.cmake
+   ```
+
+5. **Force MKL in CMake:** The build script uses `-DBLA_VENDOR=Intel10_64lp_seq` to force CMake's FindLAPACK to use Intel MKL. Ensure this flag is present in your CMake configure command.
+
+### Why We Use External MKL Instead of Internal LAPACK
+
+This toolchain uses external Intel MKL for BLAS/LAPACK (`-DQE_LAPACK_INTERNAL=OFF`) rather than QE's internal LAPACK implementation. This was a deliberate design decision based on our experience:
+
+In theory, `QE_LAPACK_INTERNAL=ON` should work on Windows with oneAPI compilers. However, local experiments revealed configure failures and compatibility issues between QE's internal LAPACK and the Intel oneAPI toolchain. Based on prior experience, mixing GNU-compiled LAPACK (which QE's internal LAPACK typically uses) with Intel compilers on Windows tends to be fragile and can lead to runtime issues.
+
+Therefore, we decided to standardize on external Intel MKL for BLAS/LAPACK on this oneAPI path and not invest more time into the internal LAPACK route. This approach provides:
+- Better performance (MKL is highly optimized for Intel architectures)
+- Proven compatibility with Intel compilers
+- Simplified build configuration (no need to compile LAPACK from source)
+- Consistent behavior across local development and CI environments
+
 ## Advanced Usage
 
 ### Building Specific Targets
@@ -353,8 +640,14 @@ Builds QE using Intel oneAPI compilers.
 
 ## Additional Resources
 
-- QE Official Documentation: https://www.quantum-espresso.org/
-- Intel oneAPI Documentation: https://www.intel.com/content/www/us/en/developer/tools/oneapi/documentation.html
-- QE GitHub Repository: https://github.com/QEF/q-e
+- **QE Official Documentation:** https://www.quantum-espresso.org/
+- **Intel oneAPI Documentation:** https://www.intel.com/content/www/us/en/developer/tools/oneapi/documentation.html
+- **QE GitHub Repository:** https://github.com/QEF/q-e
+- **Intel oneAPI CI Samples:** https://github.com/oneapi-src/oneapi-ci
+  - Sample CI configurations for installing oneAPI in various CI systems
+  - Component listings and installation methods
+- **oneAPI CI Component Documentation:** https://oneapi-src.github.io/oneapi-ci/#intelr-oneapi-hpc-toolkit
+  - Complete list of component IDs for Windows/Linux/macOS
+  - Version information and component dependencies
 
 

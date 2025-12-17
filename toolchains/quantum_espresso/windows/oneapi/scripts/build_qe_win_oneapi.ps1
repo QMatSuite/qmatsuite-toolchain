@@ -310,7 +310,6 @@ $cmakeConfigure = @(
     "-DQE_CPP=`"$icxPath`"",                    # Use icx as C preprocessor (QE requirement)
     "-DQE_ENABLE_MPI=$mpiFlag",        # MPI support (ON/OFF)
     "-DQE_LAPACK_INTERNAL=OFF",        # Use external MKL, not internal LAPACK
-    "-DBLA_VENDOR=Intel10_64lp_seq",   # Force MKL (sequential) for FindLAPACK/FindBLAS
     "-DQE_ENABLE_OPENMP=OFF",          # Disable OpenMP for initial build
     "-DQE_ENABLE_SCALAPACK=OFF",       # Disable SCALAPACK for initial build
     "-DQE_ENABLE_HDF5=OFF",            # Disable HDF5 for initial build

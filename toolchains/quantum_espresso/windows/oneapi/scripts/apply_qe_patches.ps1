@@ -30,7 +30,18 @@ function Apply-OnePatch {
     if (-not (Test-Path $full)) { throw "Patch not found: $full" }
 
     Write-Host "Checking patch: $PatchFile"
-    & git -C $QePath apply --check $full
+    
+    # First check if already applied (suppress output to avoid confusing error messages)
+    # This is the common case when QE source is cached from a previous CI run
+    $null = & git -C $QePath apply --reverse --check $full 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Skipping (already applied): $PatchFile"
+        return
+    }
+
+    # Patch is not applied, try to apply it
+    # Suppress check output, but we'll see errors if actual apply fails
+    $checkOutput = & git -C $QePath apply --check $full 2>&1
     $rc = $LASTEXITCODE
     if ($rc -eq 0) {
         Write-Host "Applying patch: $PatchFile"
@@ -39,13 +50,8 @@ function Apply-OnePatch {
         return
     }
 
-    # Check if already applied
-    & git -C $QePath apply --reverse --check $full
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Skipping (already applied): $PatchFile"
-        return
-    }
-
+    # Patch check failed and it's not already applied - show the error
+    Write-Host $checkOutput
     throw "Patch $PatchFile failed --check and is not already applied. Resolve manually."
 }
 

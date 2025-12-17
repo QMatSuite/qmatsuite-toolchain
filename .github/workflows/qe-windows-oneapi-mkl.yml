@@ -4,11 +4,11 @@ on:
   push:
     paths:
       - 'toolchains/quantum_espresso/windows/oneapi/**'
-      - '.github/workflows/windows-oneapi-qe.yml'
+      - '.github/workflows/qe-windows-oneapi-mkl.yml'
   pull_request:
     paths:
       - 'toolchains/quantum_espresso/windows/oneapi/**'
-      - '.github/workflows/windows-oneapi-qe.yml'
+      - '.github/workflows/qe-windows-oneapi-mkl.yml'
   workflow_dispatch:
 
 concurrency:
@@ -22,7 +22,7 @@ defaults:
 jobs:
   build:
     # NOTE: Installs Intel oneAPI (compilers + MKL) and wires MKLROOT/CMAKE_PREFIX_PATH
-    # so CMake FindLAPACK finds MKL (BLA_VENDOR=Intel10_64lp_seq).
+    # so CMake FindLAPACK can locate MKL.
     runs-on: windows-latest
     env:
       ONEAPI_ROOT: 'C:\Program Files (x86)\Intel\oneAPI'
