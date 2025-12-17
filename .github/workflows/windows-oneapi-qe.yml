@@ -41,26 +41,14 @@ jobs:
           restore-keys: |
             qe-oneapi-${{ runner.os }}-
 
-      - name: Cache oneAPI install
-        id: cache-oneapi
-        uses: actions/cache@v4
+      - name: Install oneAPI (Intel compiler + MKL)
+        uses: fortran-lang/setup-fortran@v1
         with:
-          path: |
-            C:\Program Files (x86)\Intel\oneAPI
-            C:\ProgramData\chocolatey\lib\intel-oneapi-*
-          key: oneapi-${{ runner.os }}-${{ hashFiles('.github/workflows/windows-oneapi-qe.yml') }}
-          restore-keys: |
-            oneapi-${{ runner.os }}-
-
-      - name: Install oneAPI (if needed)
-        if: steps.cache-oneapi.outputs.cache-hit != 'true'
-        uses: modflowpy/install-intelfortran-action@v1
-        with:
-          components: |
-            intel.oneapi.win.ifx-compiler
-            intel.oneapi.win.icx-compiler
-            intel.oneapi.win.mkl.devel
-            intel.oneapi.win.mkl
+          compiler: intel
+          version: latest
+          mkl: true
+          cache: true
+          setvars: true
 
       - name: Install build tools (cmake, ninja)
         run: |
