@@ -57,48 +57,57 @@ This repository uses a vendor/submodule approach:
    - Download from: https://git-scm.com/download/win
    - Or install via Chocolatey: `choco install git`
 
-## Quick Start
+## Quick Start (end-to-end workflow)
 
-### Step 1: Clone QE Source
+Order matters: refresh (clone) → apply patches → build → stage.
 
-Run the refresh script to clean any existing QE sources and clone the latest QE release:
+### Step 0: Install prerequisites
+- Intel oneAPI HPC Toolkit (2024+). Includes ifx/icx, MKL, setvars.bat.
+- Visual Studio 2022 (or 2019) Build Tools with “Desktop development with C++”. oneAPI supports VS2019/VS2022; older versions do not work.
+- Chocolatey (recommended) plus packages:
+  ```powershell
+  choco install git
+  choco install cmake
+  choco install ninja
+  ```
+  (If you install CMake/Ninja manually, ensure they’re on PATH.)
 
+### Step 1: Refresh (clone QE from git)
 ```powershell
 .\scripts\refresh_qe_source.ps1
 ```
+Notes:
+- Cleans prior QE sources/build artifacts, preserves repo files.
+- Clones QE from GitLab with submodules into `upstream/qe`.
+- To target a tag: `.\scripts\refresh_qe_source.ps1 -QeVersion qe-7.5`
+- Dry run: `.\scripts\refresh_qe_source.ps1 -DryRun`
 
-This script will:
-- Safely remove QE upstream sources and build artifacts (preserving your code in `scripts/`, `docs/`, etc.)
-- Clone the newest QE release from git into `upstream/qe/`
-- Initialize all git submodules recursively
-
-**Dry Run Mode:** To see what would be deleted without actually doing it:
+### Step 2: Apply Windows patches
 ```powershell
-.\scripts\refresh_qe_source.ps1 -DryRun
+.\scripts\apply_qe_patches.ps1
 ```
+Notes:
+- Applies `qe-win-cmake-generation`, `qe-win-c-portability`, `qe-win-devxlib-timer` (and any future patches) to `upstream/qe`.
+- Idempotent: skips if already applied; fails if patch does not apply cleanly.
 
-**Specific Version:** To clone a specific QE version:
-```powershell
-.\scripts\refresh_qe_source.ps1 -QeVersion qe-7.5
-```
-
-### Step 2: Build QE
-
-Run the build script:
-
+### Step 3: Build QE (oneAPI + Ninja)
 ```powershell
 .\scripts\build_qe_win_oneapi.ps1
 ```
+Options:
+- Serial build: `-NoMpi`
+- Custom source dir: `-QeSourceDir "path/to/qe"`
 
-For a serial build (no MPI):
+### Step 4: Stage runtime-ready binaries
 ```powershell
-.\scripts\build_qe_win_oneapi.ps1 -NoMpi
+.\scripts\stage_qe_windows.ps1
 ```
-
-**Custom QE Source Location:** If QE is cloned to a different location:
-```powershell
-.\scripts\build_qe_win_oneapi.ps1 -QeSourceDir "path/to/qe"
-```
+Notes:
+- Outputs to `dist/win-oneapi/`
+- Copies QE executables plus required Intel runtimes (OpenMP/MKL/ifx).
+- Filter executables: `-Only pw.x,ph.x`
+- Clean staged dir: `-Clean`
+- `stage_qe_windows.ps1` now auto-discovers `dumpbin.exe` (VS2022/2019) and sanitizes PATH entries to avoid “Illegal characters in path”; no manual PATH tweaks needed.
 
 ## Build Process
 
@@ -147,6 +156,7 @@ You should find:
 - Patch files:
   - `qe-win-cmake-generation.patch` – CMake/build helpers, Fortran include preprocessing, git-rev generation
   - `qe-win-c-portability.patch` – Windows portability fixes in C sources
+  - `qe-win-submodules.patch` – submodule pointer updates (external/d3q, external/devxlib)
 - Always clone QE via git with submodules:
   ```powershell
   git clone --recursive https://github.com/QEF/q-e.git

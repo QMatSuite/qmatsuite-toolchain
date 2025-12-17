@@ -47,6 +47,31 @@ function Get-DumpbinPath {
     return $null
 }
 
+# Locate VS2022 dumpbin and add it to PATH for this session if not already present
+function Ensure-DumpbinInPath {
+    $path = Get-DumpbinPath
+    if ($path) { return $path }
+
+    $editions = @("Community","Professional","Enterprise","BuildTools")
+    foreach ($ed in $editions) {
+        $msvcRoot = "C:\Program Files\Microsoft Visual Studio\2022\$ed\VC\Tools\MSVC"
+        if (-not (Test-Path $msvcRoot)) { continue }
+        $versions = Get-ChildItem -Path $msvcRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+        foreach ($v in $versions) {
+            $candidate = Join-Path $v.FullName "bin\Hostx64\x64\dumpbin.exe"
+            if (Test-Path $candidate) {
+                # Prepend to PATH for this session so subsequent calls can resolve it
+                $dir = Split-Path $candidate -Parent
+                $env:PATH = "$dir;$env:PATH"
+                # Also set VCToolsInstallDir for compatibility with existing logic
+                $env:VCToolsInstallDir = $v.FullName
+                return $candidate
+            }
+        }
+    }
+    return $null
+}
+
 function Get-SearchRoots {
     param(
         [string]$OneApiRoot
@@ -225,6 +250,20 @@ function Copy-DllPatterns {
     }
 }
 
+function Get-ValidPathDirs {
+    $dirs = @()
+    foreach ($p in ($env:PATH -split ';')) {
+        if (-not $p) { continue }
+        $t = $p.Trim('"')
+        try {
+            if (Test-Path $t) { $dirs += $t }
+        } catch {
+            # skip malformed entries
+        }
+    }
+    return $dirs
+}
+
 function Copy-DllClosure {
     param(
         [string[]]$ExePaths,
@@ -234,7 +273,7 @@ function Copy-DllClosure {
         [switch]$VerboseDeps,
         [int]$MaxDepth = 5
     )
-    $pathDirs = ($env:PATH -split ';') | Where-Object { $_ -and (Test-Path $_) }
+    $pathDirs = Get-ValidPathDirs
     $queue = New-Object System.Collections.Queue
     $processed = @{}
     $missing = [System.Collections.Generic.List[string]]::new()
@@ -352,7 +391,7 @@ $stagedExeFiles = Stage-Executables -BinDir $BuildBin -DistDir $DistRoot -Only $
 $stagedExePaths = $stagedExeFiles | ForEach-Object { Join-Path $DistRoot $_.Name }
 
 # Dependency-based copy using dumpbin if available
-$dumpbinPath = Get-DumpbinPath
+$dumpbinPath = Ensure-DumpbinInPath
 if ($dumpbinPath) {
     Write-Host "Using dumpbin at: $dumpbinPath"
     $searchRoots = Get-SearchRoots -OneApiRoot $oneApiRoot
