@@ -54,13 +54,10 @@ jobs:
 
       - name: Install oneAPI (if needed)
         if: steps.cache-oneapi.outputs.cache-hit != 'true'
-        uses: modflowpy/install-intelfortran-action@v1
-        with:
-          components: |
-            intel.oneapi.win.ifx-compiler
-            intel.oneapi.win.icx-compiler
-            intel.oneapi.win.mkl.devel
-            intel.oneapi.win.mkl
+        run: |
+          winget source update
+          winget install --silent --accept-package-agreements --accept-source-agreements Intel.oneAPI.BaseKit
+          winget install --silent --accept-package-agreements --accept-source-agreements Intel.oneAPI.HPCKit
 
       - name: Install build tools (cmake, ninja)
         run: |
