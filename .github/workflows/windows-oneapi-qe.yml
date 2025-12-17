@@ -46,25 +46,53 @@ jobs:
       - name: Install oneAPI (Intel compiler + MKL)
         uses: modflowpy/install-intelfortran-action@v1
 
-      - name: Install MKL via oneAPI offline installer
-        # The installer URL is provided by modflowpy action via INTEL_HPCKIT_INSTALLER_URL.
-        # We add MKL components explicitly to ensure FindLAPACK can locate vendor BLAS/LAPACK.
+      - name: Install MKL via oneAPI offline installer (extract + bootstrapper)
+        # Based on oneapi-ci approach: extract installer, then use bootstrapper with config file.
+        # This avoids the slow/stuck installer issue when using --components flag directly on Windows.
+        # Reference: https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Installing-and-setting-up-oneAPI-base-kit-on-GitHub-Actions-and/m-p/1376598
         run: |
           $url = $env:INTEL_HPCKIT_INSTALLER_URL
           if (-not $url) {
             Write-Error "INTEL_HPCKIT_INSTALLER_URL not set; cannot install MKL."
             exit 1
           }
-          $dst = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
+          $installerExe = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
+          $extractDir = Join-Path $env:RUNNER_TEMP "oneapi_extracted"
+          $configFile = Join-Path $env:RUNNER_TEMP "mkl_install_config.ini"
+          
           Write-Host "Downloading oneAPI installer from $url"
-          Invoke-WebRequest -Uri $url -OutFile $dst
-          Write-Host "Running installer to add MKL components..."
-          $args = "-s -a --eula accept --components=intel.oneapi.win.mkl.devel,intel.oneapi.win.mkl"
-          Start-Process -FilePath $dst -ArgumentList $args -Wait -NoNewWindow
+          Invoke-WebRequest -Uri $url -OutFile $installerExe
+          
+          Write-Host "Extracting installer to $extractDir"
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          & $installerExe -s -x -f $extractDir --log (Join-Path $env:RUNNER_TEMP "extract.log")
           if ($LASTEXITCODE -ne 0) {
-            Write-Error "MKL installer failed with exit code $LASTEXITCODE"
+            Write-Error "Extraction failed with exit code $LASTEXITCODE"
             exit 1
           }
+          
+          Write-Host "Creating install config file for MKL components"
+          $configContent = @(
+            "eula=accept",
+            "components=intel.oneapi.win.mkl.devel:intel.oneapi.win.mkl",
+            'p="NEED_VS2017_INTEGRATION=0 NEED_VS2019_INTEGRATION=0 NEED_VS2022_INTEGRATION=0"'
+          )
+          $configContent | Out-File -FilePath $configFile -Encoding ASCII
+          
+          $bootstrapper = Join-Path $extractDir "bootstrapper.exe"
+          if (-not (Test-Path $bootstrapper)) {
+            Write-Error "Bootstrapper not found at $bootstrapper"
+            exit 1
+          }
+          
+          Write-Host "Running bootstrapper to install MKL components..."
+          & $bootstrapper -s --action install --config $configFile --log-dir $env:RUNNER_TEMP --eula accept
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "MKL installation failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          
+          Write-Host "MKL installation completed successfully"
 
       - name: Set MKL environment for CMake
         run: |
