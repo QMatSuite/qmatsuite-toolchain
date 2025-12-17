@@ -43,16 +43,6 @@ jobs:
           restore-keys: |
             qe-oneapi-${{ runner.os }}-
 
-      - name: Cache oneAPI installer
-        id: cache-installer
-        uses: actions/cache@v4
-        with:
-          path: |
-            .github/cache/oneapi-installer
-          key: oneapi-installer-2025.3.0-${{ runner.os }}
-          restore-keys: |
-            oneapi-installer-${{ runner.os }}-
-
       - name: Cache oneAPI installation
         id: cache-oneapi-install
         uses: actions/cache@v4
@@ -68,17 +58,36 @@ jobs:
             oneapi-install-${{ runner.os }}-
 
       - name: Verify cached oneAPI installation
+        id: verify-install
+        continue-on-error: true
         if: steps.cache-oneapi-install.outputs.cache-hit == 'true'
         run: |
-          Write-Host "oneAPI installation restored from cache"
+          Write-Host "oneAPI installation restored from cache, verifying..."
           if (-not (Test-Path "$env:ONEAPI_ROOT\setvars.bat")) {
-            Write-Error "Cached oneAPI installation incomplete: setvars.bat not found"
+            Write-Warning "Cached oneAPI installation incomplete: setvars.bat not found"
             exit 1
           }
-          Write-Host "Verified: oneAPI installation is complete"
+          # Verify MKL is present
+          $mklPath = Join-Path $env:ONEAPI_ROOT "mkl\latest"
+          if (-not (Test-Path $mklPath)) {
+            Write-Warning "Cached oneAPI installation incomplete: MKL not found at $mklPath"
+            exit 1
+          }
+          Write-Host "Verified: oneAPI installation is complete and valid"
+
+      - name: Cache oneAPI installer
+        id: cache-installer
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true' || steps.verify-install.outcome != 'success'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .github/cache/oneapi-installer
+          key: oneapi-installer-2025.3.0-${{ runner.os }}
+          restore-keys: |
+            oneapi-installer-${{ runner.os }}-
 
       - name: Install oneAPI (compilers + MKL) via offline installer
-        if: steps.cache-oneapi-install.outputs.cache-hit != 'true'
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true' || steps.verify-install.outcome != 'success'
         # Install Intel oneAPI HPC Kit with compilers (ifx/icx) and MKL in one go.
         # Based on oneapi-ci approach: extract installer, then use bootstrapper with config file.
         # This avoids the slow/stuck installer issue when using --components flag directly on Windows.

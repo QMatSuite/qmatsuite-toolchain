@@ -562,7 +562,7 @@ Then run the build script again.
    cmake -DCMAKE_PREFIX_PATH="$env:MKLROOT\lib\cmake\mkl" -P FindMKL.cmake
    ```
 
-5. **Force MKL in CMake:** The build script uses `-DBLA_VENDOR=Intel10_64lp_seq` to force CMake's FindLAPACK to use Intel MKL. Ensure this flag is present in your CMake configure command.
+**Note on `-DBLA_VENDOR` flag:** The build script does not use `-DBLA_VENDOR=Intel10_64lp_seq` to force FindLAPACK to use Intel MKL. This flag was originally introduced because we thought MKL was installed but FindLAPACK couldn't locate it. However, we later discovered that MKL wasn't actually installed at that time. Once MKL is properly installed (with the `intel.oneapi.win.mkl.devel` component) and `CMAKE_PREFIX_PATH` is set to include MKL's CMake package directory, FindLAPACK automatically detects and uses MKL without needing the vendor flag. We removed the flag to keep the build configuration more generalized and compatible with other BLAS/LAPACK implementations.
 
 ### Why We Use External MKL Instead of Internal LAPACK
 
