@@ -43,38 +43,42 @@ jobs:
           restore-keys: |
             qe-oneapi-${{ runner.os }}-
 
-      - name: Install oneAPI (Intel compiler + MKL)
-        uses: modflowpy/install-intelfortran-action@v1
-
-      - name: Install MKL via oneAPI offline installer (extract + bootstrapper)
+      - name: Install oneAPI (compilers + MKL) via offline installer
+        # Install Intel oneAPI HPC Kit with compilers (ifx/icx) and MKL in one go.
         # Based on oneapi-ci approach: extract installer, then use bootstrapper with config file.
         # This avoids the slow/stuck installer issue when using --components flag directly on Windows.
         # Reference: https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Installing-and-setting-up-oneAPI-base-kit-on-GitHub-Actions-and/m-p/1376598
+        # HPC Kit 2022.3.0 URL (can be updated to latest version as needed)
         run: |
-          $url = $env:INTEL_HPCKIT_INSTALLER_URL
-          if (-not $url) {
-            Write-Error "INTEL_HPCKIT_INSTALLER_URL not set; cannot install MKL."
-            exit 1
-          }
+          $url = "https://registrationcenter-download.intel.com/akdlm/irc_nas/18857/w_HPCKit_p_2022.3.0.9564_offline.exe"
           $installerExe = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
           $extractDir = Join-Path $env:RUNNER_TEMP "oneapi_extracted"
-          $configFile = Join-Path $env:RUNNER_TEMP "mkl_install_config.ini"
+          $configFile = Join-Path $env:RUNNER_TEMP "oneapi_install_config.ini"
           
-          Write-Host "Downloading oneAPI installer from $url"
+          Write-Host "Downloading oneAPI HPC Kit installer from $url"
           Invoke-WebRequest -Uri $url -OutFile $installerExe
           
           Write-Host "Extracting installer to $extractDir"
           New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-          & $installerExe -s -x -f $extractDir --log (Join-Path $env:RUNNER_TEMP "extract.log")
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Extraction failed with exit code $LASTEXITCODE"
+          $extractLog = Join-Path $env:RUNNER_TEMP "extract.log"
+          
+          # Use Start-Process to properly wait for extraction and capture exit code
+          $extractProc = Start-Process -FilePath $installerExe -ArgumentList "-s", "-x", "-f", $extractDir, "--log", $extractLog -Wait -PassThru -NoNewWindow
+          if ($extractProc.ExitCode -ne 0) {
+            Write-Host "Extraction log contents:"
+            if (Test-Path $extractLog) {
+              Get-Content $extractLog -Tail 50
+            }
+            Write-Error "Extraction failed with exit code $($extractProc.ExitCode)"
             exit 1
           }
           
-          Write-Host "Creating install config file for MKL components"
+          Write-Host "Extraction completed successfully"
+          
+          Write-Host "Creating install config file for compilers + MKL"
           $configContent = @(
             "eula=accept",
-            "components=intel.oneapi.win.mkl.devel:intel.oneapi.win.mkl",
+            "components=intel.oneapi.win.ifx-compiler:intel.oneapi.win.icx-compiler:intel.oneapi.win.mkl.devel:intel.oneapi.win.mkl",
             'p="NEED_VS2017_INTEGRATION=0 NEED_VS2019_INTEGRATION=0 NEED_VS2022_INTEGRATION=0"'
           )
           $configContent | Out-File -FilePath $configFile -Encoding ASCII
@@ -85,14 +89,23 @@ jobs:
             exit 1
           }
           
-          Write-Host "Running bootstrapper to install MKL components..."
-          & $bootstrapper -s --action install --config $configFile --log-dir $env:RUNNER_TEMP --eula accept
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "MKL installation failed with exit code $LASTEXITCODE"
+          Write-Host "Running bootstrapper to install compilers + MKL..."
+          $installLogDir = Join-Path $env:RUNNER_TEMP "install_logs"
+          New-Item -ItemType Directory -Path $installLogDir -Force | Out-Null
+          
+          # Use Start-Process to properly wait for installation and capture exit code
+          $installProc = Start-Process -FilePath $bootstrapper -ArgumentList "-s", "--action", "install", "--config", $configFile, "--log-dir", $installLogDir, "--eula", "accept" -Wait -PassThru -NoNewWindow
+          if ($installProc.ExitCode -ne 0) {
+            Write-Host "Installation log contents:"
+            Get-ChildItem $installLogDir -Filter "*.log" | ForEach-Object {
+              Write-Host "Log file: $($_.Name)"
+              Get-Content $_.FullName -Tail 30
+            }
+            Write-Error "oneAPI installation failed with exit code $($installProc.ExitCode)"
             exit 1
           }
           
-          Write-Host "MKL installation completed successfully"
+          Write-Host "oneAPI installation completed successfully"
 
       - name: Set MKL environment for CMake
         run: |
