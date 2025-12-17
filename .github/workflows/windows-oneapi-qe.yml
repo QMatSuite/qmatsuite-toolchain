@@ -46,6 +46,26 @@ jobs:
       - name: Install oneAPI (Intel compiler + MKL)
         uses: modflowpy/install-intelfortran-action@v1
 
+      - name: Install MKL via oneAPI offline installer
+        # The installer URL is provided by modflowpy action via INTEL_HPCKIT_INSTALLER_URL.
+        # We add MKL components explicitly to ensure FindLAPACK can locate vendor BLAS/LAPACK.
+        run: |
+          $url = $env:INTEL_HPCKIT_INSTALLER_URL
+          if (-not $url) {
+            Write-Error "INTEL_HPCKIT_INSTALLER_URL not set; cannot install MKL."
+            exit 1
+          }
+          $dst = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
+          Write-Host "Downloading oneAPI installer from $url"
+          Invoke-WebRequest -Uri $url -OutFile $dst
+          Write-Host "Running installer to add MKL components..."
+          $args = "-s -a --eula accept --components=intel.oneapi.win.mkl.devel,intel.oneapi.win.mkl"
+          Start-Process -FilePath $dst -ArgumentList $args -Wait -NoNewWindow
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "MKL installer failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
       - name: Set MKL environment for CMake
         run: |
           # Prefer existing MKLROOT; otherwise probe under ONEAPI_ROOT\mkl\*
