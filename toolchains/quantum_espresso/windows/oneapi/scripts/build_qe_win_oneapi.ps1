@@ -133,6 +133,25 @@ if (-not (Test-Path $setvarsBat)) {
 Write-Host "  Found setvars.bat: $setvarsBat" -ForegroundColor Green
 Write-Host ""
 
+# Ensure MKLROOT and CMAKE_PREFIX_PATH are set for FindLAPACK
+Write-Host "Step 1b: Preparing MKL environment for CMake..." -ForegroundColor Yellow
+if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
+    $mklRoot = $env:MKLROOT
+    Write-Host "  Using MKLROOT from environment: $mklRoot"
+} else {
+    $mklRoot = Join-Path $oneApiRoot "mkl\latest"
+    Write-Host "  Deriving MKLROOT from ONEAPI_ROOT: $mklRoot"
+}
+if (-not (Test-Path $mklRoot)) {
+    throw "ERROR: MKL not found at $mklRoot. Ensure oneAPI MKL is installed."
+}
+$env:MKLROOT = $mklRoot
+$mklPrefix = Join-Path $mklRoot "lib\cmake\mkl"
+$env:CMAKE_PREFIX_PATH = "$mklPrefix;$env:CMAKE_PREFIX_PATH"
+Write-Host "  MKLROOT set to: $env:MKLROOT"
+Write-Host "  CMAKE_PREFIX_PATH includes: $mklPrefix"
+Write-Host ""
+
 # Step 2: Determine build configuration
 # Set MPI flag based on -NoMpi parameter
 $mpiFlag = if ($NoMpi) { "OFF" } else { "ON" }
@@ -291,6 +310,7 @@ $cmakeConfigure = @(
     "-DQE_CPP=`"$icxPath`"",                    # Use icx as C preprocessor (QE requirement)
     "-DQE_ENABLE_MPI=$mpiFlag",        # MPI support (ON/OFF)
     "-DQE_LAPACK_INTERNAL=OFF",        # Use external MKL, not internal LAPACK
+    "-DBLA_VENDOR=Intel10_64lp_seq",   # Force MKL (sequential) for FindLAPACK/FindBLAS
     "-DQE_ENABLE_OPENMP=OFF",          # Disable OpenMP for initial build
     "-DQE_ENABLE_SCALAPACK=OFF",       # Disable SCALAPACK for initial build
     "-DQE_ENABLE_HDF5=OFF",            # Disable HDF5 for initial build

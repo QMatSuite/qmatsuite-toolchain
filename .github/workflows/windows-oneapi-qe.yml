@@ -46,10 +46,23 @@ jobs:
 
       - name: Set MKL environment for CMake
         run: |
-          $mklRoot = Join-Path "$env:ONEAPI_ROOT" "mkl\latest"
+          if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
+            $mklRoot = $env:MKLROOT
+          } else {
+            $mklRoot = Join-Path "$env:ONEAPI_ROOT" "mkl\latest"
+          }
+
+          if (-not (Test-Path $mklRoot)) {
+            Write-Error "MKL not found. Expected at $mklRoot. Ensure oneAPI MKL is installed."
+            exit 1
+          }
+
+          $env:MKLROOT = $mklRoot
+          $prefix = Join-Path $mklRoot "lib\cmake\mkl"
+          $env:CMAKE_PREFIX_PATH = "$prefix;$env:CMAKE_PREFIX_PATH"
+
           "MKLROOT=$mklRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
-          $prefix = "$mklRoot\lib\cmake\mkl"
-          "CMAKE_PREFIX_PATH=$prefix;$env:CMAKE_PREFIX_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CMAKE_PREFIX_PATH=$($env:CMAKE_PREFIX_PATH)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Install build tools (cmake, ninja)
         run: |
