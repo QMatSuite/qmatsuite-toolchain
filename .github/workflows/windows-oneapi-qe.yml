@@ -42,13 +42,10 @@ jobs:
             qe-oneapi-${{ runner.os }}-
 
       - name: Install oneAPI (Intel compiler + MKL)
-        uses: fortran-lang/setup-fortran@v1
+        uses: intel/setup-oneapi@v1
         with:
-          compiler: intel
-          version: latest
-          mkl: true
+          components: intel.oneapi.win.ifx-compiler:intel.oneapi.win.icx-compiler:intel.oneapi.win.mkl.devel
           cache: true
-          setvars: true
 
       - name: Install build tools (cmake, ninja)
         run: |
