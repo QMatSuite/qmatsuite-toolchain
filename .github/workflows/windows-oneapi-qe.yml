@@ -54,11 +54,13 @@ jobs:
 
       - name: Install oneAPI (if needed)
         if: steps.cache-oneapi.outputs.cache-hit != 'true'
-        run: |
-          $intelFeed = "https://intelparallelstudio-chocolatey-feed.azureedge.net/api/v2/"
-          $publicFeed = "https://community.chocolatey.org/api/v2/"
-          $sources = "$intelFeed;$publicFeed"
-          choco install --no-progress -y --source="$sources" --pre intel-oneapi-basekit intel-oneapi-hpckit
+        uses: modflowpy/install-intelfortran-action@v1
+        with:
+          components: |
+            intel.oneapi.win.ifx-compiler
+            intel.oneapi.win.icx-compiler
+            intel.oneapi.win.mkl.devel
+            intel.oneapi.win.mkl
 
       - name: Install build tools (cmake, ninja)
         run: |
