@@ -21,6 +21,8 @@ defaults:
 
 jobs:
   build:
+    # NOTE: Installs Intel oneAPI (compilers + MKL) and wires MKLROOT/CMAKE_PREFIX_PATH
+    # so CMake FindLAPACK finds MKL (BLA_VENDOR=Intel10_64lp_seq).
     runs-on: windows-latest
     env:
       ONEAPI_ROOT: 'C:\Program Files (x86)\Intel\oneAPI'
@@ -43,6 +45,12 @@ jobs:
 
       - name: Install oneAPI (Intel compiler + MKL)
         uses: modflowpy/install-intelfortran-action@v1
+
+      - name: Ensure oneAPI BaseKit (MKL) via winget
+        run: |
+          # BaseKit contains MKL; winget is reliable on hosted runners.
+          winget source update
+          winget install --silent --accept-package-agreements --accept-source-agreements Intel.oneAPI.BaseKit
 
       - name: Set MKL environment for CMake
         run: |
