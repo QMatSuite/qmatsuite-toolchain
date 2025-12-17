@@ -55,9 +55,10 @@ jobs:
       - name: Install oneAPI (if needed)
         if: steps.cache-oneapi.outputs.cache-hit != 'true'
         run: |
-          winget source update
-          winget install --silent --accept-package-agreements --accept-source-agreements Intel.oneAPI.BaseKit
-          winget install --silent --accept-package-agreements --accept-source-agreements Intel.oneAPI.HPCKit
+          $intelFeed = "https://intelparallelstudio-chocolatey-feed.azureedge.net/api/v2/"
+          $publicFeed = "https://community.chocolatey.org/api/v2/"
+          $sources = "$intelFeed;$publicFeed"
+          choco install --no-progress -y --source="$sources" --pre intel-oneapi-basekit intel-oneapi-hpckit
 
       - name: Install build tools (cmake, ninja)
         run: |
