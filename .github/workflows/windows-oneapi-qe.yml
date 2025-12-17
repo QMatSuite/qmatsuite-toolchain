@@ -46,27 +46,35 @@ jobs:
       - name: Install oneAPI (Intel compiler + MKL)
         uses: modflowpy/install-intelfortran-action@v1
 
-      - name: Ensure oneAPI BaseKit (MKL) via winget
-        run: |
-          # BaseKit contains MKL; winget is reliable on hosted runners.
-          winget source update
-          winget install --silent --accept-package-agreements --accept-source-agreements Intel.oneAPI.BaseKit
-
       - name: Set MKL environment for CMake
         run: |
-          if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
-            $mklRoot = $env:MKLROOT
-          } else {
-            $mklRoot = Join-Path "$env:ONEAPI_ROOT" "mkl\latest"
+          # Prefer existing MKLROOT; otherwise probe under ONEAPI_ROOT\mkl\*
+          function Resolve-MklRoot {
+            param([string]$OneApiRoot)
+            if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) { return $env:MKLROOT }
+            $candidate = Join-Path $OneApiRoot "mkl\latest"
+            if (Test-Path $candidate) { return $candidate }
+            $versions = Get-ChildItem -Path (Join-Path $OneApiRoot "mkl") -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+            foreach ($v in $versions) {
+              $cmakePath = Join-Path $v.FullName "lib\cmake\mkl"
+              if (Test-Path $cmakePath) { return $v.FullName }
+            }
+            return $null
           }
 
-          if (-not (Test-Path $mklRoot)) {
-            Write-Error "MKL not found. Expected at $mklRoot. Ensure oneAPI MKL is installed."
+          $mklRoot = Resolve-MklRoot -OneApiRoot $env:ONEAPI_ROOT
+          if (-not $mklRoot) {
+            Write-Error "MKL not found under $env:ONEAPI_ROOT\mkl. Ensure oneAPI Base/HPC kit with MKL is installed."
             exit 1
           }
 
           $env:MKLROOT = $mklRoot
           $prefix = Join-Path $mklRoot "lib\cmake\mkl"
+          if (-not (Test-Path $prefix)) {
+            Write-Error "MKL CMake package dir not found at $prefix"
+            exit 1
+          }
+
           $env:CMAKE_PREFIX_PATH = "$prefix;$env:CMAKE_PREFIX_PATH"
 
           "MKLROOT=$mklRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
