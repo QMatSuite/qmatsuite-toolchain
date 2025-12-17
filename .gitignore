@@ -55,6 +55,6 @@ dkms.conf
 *.dwo
 
 # Quantum ESPRESSO oneAPI workspace (Windows)
-**/upstream/qe/
+**/upstream/
 **/build*/
 **/dist/
