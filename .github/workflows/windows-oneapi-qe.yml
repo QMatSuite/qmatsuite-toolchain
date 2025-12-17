@@ -1,0 +1,84 @@
+name: QE Windows oneAPI
+
+on:
+  push:
+    paths:
+      - 'toolchains/quantum_espresso/windows/oneapi/**'
+      - '.github/workflows/windows-oneapi-qe.yml'
+  pull_request:
+    paths:
+      - 'toolchains/quantum_espresso/windows/oneapi/**'
+      - '.github/workflows/windows-oneapi-qe.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: windows-oneapi-qe-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      ONEAPI_ROOT: 'C:\Program Files (x86)\Intel\oneAPI'
+      QE_ROOT: '${{ github.workspace }}\toolchains\quantum_espresso\windows\oneapi'
+      QE_SRC: '${{ github.workspace }}\toolchains\quantum_espresso\windows\oneapi\upstream\qe'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache QE source/build
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/quantum_espresso/windows/oneapi/upstream/qe
+          key: qe-oneapi-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/**') }}
+          restore-keys: |
+            qe-oneapi-${{ runner.os }}-
+
+      - name: Cache oneAPI install
+        id: cache-oneapi
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\Program Files (x86)\Intel\oneAPI
+            C:\ProgramData\chocolatey\lib\intel-oneapi-*
+          key: oneapi-${{ runner.os }}-${{ hashFiles('.github/workflows/windows-oneapi-qe.yml') }}
+          restore-keys: |
+            oneapi-${{ runner.os }}-
+
+      - name: Install oneAPI (if needed)
+        if: steps.cache-oneapi.outputs.cache-hit != 'true'
+        run: |
+          choco install --no-progress -y intel-oneapi-basekit intel-oneapi-hpckit
+
+      - name: Install build tools (cmake, ninja)
+        run: |
+          choco install --no-progress -y cmake ninja
+
+      - name: Verify oneAPI
+        run: |
+          if (-not (Test-Path "$env:ONEAPI_ROOT\setvars.bat")) {
+            Write-Error "setvars.bat not found at $env:ONEAPI_ROOT\setvars.bat"
+          }
+
+      - name: Refresh QE source (no patch)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1" -NoPatch
+
+      - name: Apply QE patches
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\apply_qe_patches.ps1"
+
+      - name: Build QE (oneAPI, no MPI)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" -NoMpi
+

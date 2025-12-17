@@ -74,7 +74,7 @@ Order matters: refresh (clone) → apply patches → build → stage.
 
 ### Step 1: Refresh (clone QE from git)
 ```powershell
-.\scripts\refresh_qe_source.ps1
+.\scripts\refresh_qe_source.ps1 -NoPatch
 ```
 Notes:
 - Cleans prior QE sources/build artifacts, preserves repo files.
