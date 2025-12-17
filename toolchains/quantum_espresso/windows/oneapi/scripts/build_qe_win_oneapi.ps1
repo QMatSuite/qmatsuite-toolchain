@@ -426,6 +426,31 @@ try {
 }
 
 Write-Host ""
+Write-Host "Step 9: Renaming executables from *.x.exe to *.exe..." -ForegroundColor Yellow
+$binDir = Join-Path $BuildDir "bin"
+if (Test-Path $binDir) {
+    $renamedCount = 0
+    Get-ChildItem -Path $binDir -Filter "*.x.exe" | ForEach-Object {
+        $newName = $_.Name -replace '\.x\.exe$', '.exe'
+        $newPath = Join-Path $binDir $newName
+        if (Test-Path $newPath) {
+            Write-Host "  Skipping $($_.Name) - $newName already exists" -ForegroundColor Gray
+        } else {
+            Rename-Item -Path $_.FullName -NewName $newName -Force
+            Write-Host "  Renamed: $($_.Name) -> $newName" -ForegroundColor Green
+            $renamedCount++
+        }
+    }
+    if ($renamedCount -gt 0) {
+        Write-Host "  Renamed $renamedCount executable(s)" -ForegroundColor Green
+    } else {
+        Write-Host "  No executables to rename (already renamed or none found)" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  Warning: bin directory not found at $binDir" -ForegroundColor Yellow
+}
+
+Write-Host ""
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "Build completed successfully!" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
