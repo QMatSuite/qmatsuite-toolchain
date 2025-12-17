@@ -6,13 +6,17 @@ index f69b7bd..bb5f16d 100644
 +#if defined(_WIN32)
 +#include <windows.h>
 +
-+/* Returns wallclock time in seconds using high-resolution Windows timers */
++/* Returns wallclock time in seconds using FILETIME */
 +double wallclock_c(void)
 +{
-+  LARGE_INTEGER freq, counter;
-+  QueryPerformanceFrequency(&freq);
-+  QueryPerformanceCounter(&counter);
-+  return (double)counter.QuadPart / (double)freq.QuadPart;
++  FILETIME ft;
++  ULARGE_INTEGER uli;
++  GetSystemTimeAsFileTime(&ft);
++  uli.LowPart = ft.dwLowDateTime;
++  uli.HighPart = ft.dwHighDateTime;
++  // FILETIME is 100-ns ticks since 1601-01-01; convert to Unix epoch seconds
++  const ULONGLONG EPOCH_DIFF = 116444736000000000ULL;
++  return (double)(uli.QuadPart - EPOCH_DIFF) / 10000000.0;
 +}
 +
 +#else
