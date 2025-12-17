@@ -51,6 +51,7 @@ jobs:
           } else {
             choco source enable -n=$name
           }
+          choco source list --allow-unofficial
 
       - name: Cache oneAPI install
         id: cache-oneapi
@@ -66,7 +67,8 @@ jobs:
       - name: Install oneAPI (if needed)
         if: steps.cache-oneapi.outputs.cache-hit != 'true'
         run: |
-          choco install --no-progress -y --source=IntelOneAPI --pre intel-oneapi-basekit intel-oneapi-hpckit
+          $srcs = "IntelOneAPI;https://community.chocolatey.org/api/v2/"
+          choco install --no-progress -y --source=$srcs --pre intel-oneapi-basekit intel-oneapi-hpckit
 
       - name: Install build tools (cmake, ninja)
         run: |
