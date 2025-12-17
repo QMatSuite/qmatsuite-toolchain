@@ -48,9 +48,9 @@ jobs:
         # Based on oneapi-ci approach: extract installer, then use bootstrapper with config file.
         # This avoids the slow/stuck installer issue when using --components flag directly on Windows.
         # Reference: https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Installing-and-setting-up-oneAPI-base-kit-on-GitHub-Actions-and/m-p/1376598
-        # HPC Kit 2022.3.0 URL (can be updated to latest version as needed)
+        # HPC Kit 2025.3.0 URL - component IDs from https://oneapi-src.github.io/oneapi-ci/
         run: |
-          $url = "https://registrationcenter-download.intel.com/akdlm/irc_nas/18857/w_HPCKit_p_2022.3.0.9564_offline.exe"
+          $url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/3a871580-f839-46ed-aeae-685084127279/intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
           $installerExe = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
           $extractDir = Join-Path $env:RUNNER_TEMP "oneapi_extracted"
           $configFile = Join-Path $env:RUNNER_TEMP "oneapi_install_config.ini"
@@ -76,9 +76,13 @@ jobs:
           Write-Host "Extraction completed successfully"
           
           Write-Host "Creating install config file for compilers + MKL"
+          # Component IDs from https://oneapi-src.github.io/oneapi-ci/
+          # intel.oneapi.win.cpp-dpcpp-common: C++ compiler (icx)
+          # intel.oneapi.win.ifort-compiler: Fortran compiler (ifx/ifort)
+          # intel.oneapi.win.mkl.devel: MKL development package
           $configContent = @(
             "eula=accept",
-            "components=intel.oneapi.win.ifx-compiler:intel.oneapi.win.icx-compiler:intel.oneapi.win.mkl.devel:intel.oneapi.win.mkl",
+            "components=intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.ifort-compiler:intel.oneapi.win.mkl.devel",
             'p="NEED_VS2017_INTEGRATION=0 NEED_VS2019_INTEGRATION=0 NEED_VS2022_INTEGRATION=0"'
           )
           $configContent | Out-File -FilePath $configFile -Encoding ASCII
