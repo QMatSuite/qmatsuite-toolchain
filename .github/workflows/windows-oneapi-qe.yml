@@ -80,7 +80,9 @@ jobs:
       - name: Apply QE patches
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
-            -File "$env:QE_ROOT\scripts\apply_qe_patches.ps1"
+            -File "$env:QE_ROOT\scripts\apply_qe_patches.ps1" `
+            -QeDir "$env:QE_SRC" `
+            -PatchDir "$env:QE_ROOT\patches"
 
       - name: Build QE (oneAPI, no MPI)
         run: |
