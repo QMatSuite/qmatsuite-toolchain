@@ -42,10 +42,14 @@ jobs:
             qe-oneapi-${{ runner.os }}-
 
       - name: Install oneAPI (Intel compiler + MKL)
-        uses: intel/setup-oneapi@v1
-        with:
-          components: intel.oneapi.win.ifx-compiler:intel.oneapi.win.icx-compiler:intel.oneapi.win.mkl.devel
-          cache: true
+        uses: modflowpy/install-intelfortran-action@v1
+
+      - name: Set MKL environment for CMake
+        run: |
+          $mklRoot = Join-Path "$env:ONEAPI_ROOT" "mkl\latest"
+          "MKLROOT=$mklRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $prefix = "$mklRoot\lib\cmake\mkl"
+          "CMAKE_PREFIX_PATH=$prefix;$env:CMAKE_PREFIX_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Install build tools (cmake, ninja)
         run: |
