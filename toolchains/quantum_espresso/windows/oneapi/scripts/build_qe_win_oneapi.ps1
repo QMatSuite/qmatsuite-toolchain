@@ -326,12 +326,14 @@ $cmakeConfigure = @(
 
 # Build CMake build command
 # Build only the 'pw' target initially (can be extended later)
+# Use --verbose to show compilation commands in real-time
 $cmakeBuild = @(
     $cmakeExe,
     "--build", "`"$($BuildDir)`"",     # Build directory
     "--target", "pw",                  # Target to build (pw.x executable)
     "--config", "Release",             # Configuration (for multi-config generators)
-    "--parallel"                        # Use parallel build
+    "--parallel",                       # Use parallel build
+    "--verbose"                         # Show compilation commands in real-time
 ) -join " "
 
 # Step 8: Execute build in single cmd.exe process
@@ -367,27 +369,12 @@ if ($vsFound -and $vsBasePath) {
     }
 }
 
-# Assemble command: initialize VS, then oneAPI, then configure, then build
-# We need VS linker initialized before oneAPI compilers can use it
+# Note: Commands are assembled in the try block below to show output separately
 if ($vsInitScript) {
-    # Initialize VS first (for linker), then oneAPI (for compilers), then run CMake
-    # VsDevCmd.bat needs -arch=x64 -host_arch=x64 for 64-bit, vcvarsall.bat needs x64
-    if ($vsInitScript -like "*VsDevCmd.bat") {
-        $vsInitArgs = "-arch=x64 -host_arch=x64"
-    } else {
-        $vsInitArgs = "x64"
-    }
-    $cmdLine = "`"$vsInitScript`" $vsInitArgs >nul 2>&1 && `"$setvarsBat`" intel64 >nul 2>&1 && $cmakeConfigure && $cmakeBuild"
     Write-Host "  Using Visual Studio linker initialization" -ForegroundColor Green
 } else {
-    # Fall back to setvars.bat with vs2022 (may not work if VS not properly detected)
-    $cmdLine = "`"$setvarsBat`" intel64 vs2022 >nul 2>&1 && $cmakeConfigure && $cmakeBuild"
     Write-Host "  Using setvars.bat VS initialization (may fail if VS not detected)" -ForegroundColor Yellow
 }
-Write-Host ""
-
-Write-Host "Command to execute:" -ForegroundColor Gray
-Write-Host $cmdLine -ForegroundColor Gray
 Write-Host ""
 
 # Execute in cmd.exe and capture exit code
@@ -396,12 +383,37 @@ $oldErrorAction = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 
 try {
-    # Run the command and capture output
-    $buildOutput = cmd /c $cmdLine 2>&1
-    $exitCode = $LASTEXITCODE
+    # Run the command and stream output in real-time
+    Write-Host "Starting CMake configuration and build..." -ForegroundColor Cyan
+    Write-Host ""
     
-    # Show output (CMake configuration and build progress)
-    Write-Host $buildOutput
+    # Build initialization prefix (VS + oneAPI setvars)
+    if ($vsInitScript) {
+        if ($vsInitScript -like "*VsDevCmd.bat") {
+            $vsInitPrefix = "`"$vsInitScript`" -arch=x64 -host_arch=x64 >nul 2>&1"
+        } else {
+            $vsInitPrefix = "`"$vsInitScript`" x64 >nul 2>&1"
+        }
+    } else {
+        $vsInitPrefix = "`"$setvarsBat`" intel64 vs2022 >nul 2>&1"
+    }
+    $oneApiInit = "`"$setvarsBat`" intel64 >nul 2>&1"
+    
+    # Split configure and build to show output separately with verbose flags
+    $configureCmd = "$vsInitPrefix && $oneApiInit && $cmakeConfigure"
+    $buildCmd = "$vsInitPrefix && $oneApiInit && $cmakeBuild"
+    
+    Write-Host "=== CMake Configuration ===" -ForegroundColor Yellow
+    & cmd.exe /c $configureCmd
+    $configureExit = $LASTEXITCODE
+    if ($configureExit -ne 0) {
+        throw "CMake configuration failed with exit code $configureExit"
+    }
+    
+    Write-Host ""
+    Write-Host "=== CMake Build (verbose) ===" -ForegroundColor Yellow
+    & cmd.exe /c $buildCmd
+    $exitCode = $LASTEXITCODE
     
     # Check if build succeeded
     if ($exitCode -ne 0) {

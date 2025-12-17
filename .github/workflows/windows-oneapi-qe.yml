@@ -43,7 +43,42 @@ jobs:
           restore-keys: |
             qe-oneapi-${{ runner.os }}-
 
+      - name: Cache oneAPI installer
+        id: cache-installer
+        uses: actions/cache@v4
+        with:
+          path: |
+            .github/cache/oneapi-installer
+          key: oneapi-installer-2025.3.0-${{ runner.os }}
+          restore-keys: |
+            oneapi-installer-${{ runner.os }}-
+
+      - name: Cache oneAPI installation
+        id: cache-oneapi-install
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\Program Files (x86)\Intel\oneAPI\compiler
+            C:\Program Files (x86)\Intel\oneAPI\mkl
+            C:\Program Files (x86)\Intel\oneAPI\setvars.bat
+            C:\Program Files (x86)\Intel\oneAPI\setvars-vcvarsall.bat
+          key: oneapi-install-2025.3.0-${{ runner.os }}-cpp-dpcpp-common-ifort-compiler-mkl-devel
+          restore-keys: |
+            oneapi-install-2025.3.0-${{ runner.os }}-
+            oneapi-install-${{ runner.os }}-
+
+      - name: Verify cached oneAPI installation
+        if: steps.cache-oneapi-install.outputs.cache-hit == 'true'
+        run: |
+          Write-Host "oneAPI installation restored from cache"
+          if (-not (Test-Path "$env:ONEAPI_ROOT\setvars.bat")) {
+            Write-Error "Cached oneAPI installation incomplete: setvars.bat not found"
+            exit 1
+          }
+          Write-Host "Verified: oneAPI installation is complete"
+
       - name: Install oneAPI (compilers + MKL) via offline installer
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true'
         # Install Intel oneAPI HPC Kit with compilers (ifx/icx) and MKL in one go.
         # Based on oneapi-ci approach: extract installer, then use bootstrapper with config file.
         # This avoids the slow/stuck installer issue when using --components flag directly on Windows.
@@ -51,12 +86,24 @@ jobs:
         # HPC Kit 2025.3.0 URL - component IDs from https://oneapi-src.github.io/oneapi-ci/
         run: |
           $url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/3a871580-f839-46ed-aeae-685084127279/intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
+          $cacheDir = ".github/cache/oneapi-installer"
+          $cachedInstaller = Join-Path $cacheDir "intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
           $installerExe = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
           $extractDir = Join-Path $env:RUNNER_TEMP "oneapi_extracted"
           $configFile = Join-Path $env:RUNNER_TEMP "oneapi_install_config.ini"
           
-          Write-Host "Downloading oneAPI HPC Kit installer from $url"
-          Invoke-WebRequest -Uri $url -OutFile $installerExe
+          # Use cached installer if available, otherwise download
+          if (Test-Path $cachedInstaller) {
+            Write-Host "Using cached oneAPI installer from $cachedInstaller"
+            Copy-Item -Path $cachedInstaller -Destination $installerExe -Force
+          } else {
+            Write-Host "Downloading oneAPI HPC Kit installer from $url"
+            New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+            Invoke-WebRequest -Uri $url -OutFile $installerExe
+            # Save to cache for next run
+            Copy-Item -Path $installerExe -Destination $cachedInstaller -Force
+            Write-Host "Cached installer for future runs"
+          }
           
           Write-Host "Extracting installer to $extractDir"
           New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
