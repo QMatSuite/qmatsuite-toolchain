@@ -2,6 +2,16 @@
 
 This folder packages the Windows native oneAPI workflow for Quantum ESPRESSO (QE). It clones QE, applies Windows-focused patches, builds with ifx/icx via CMake/Ninja, and stages runnable binaries.
 
+## Prerequisites
+
+- Chocolatey for quick tooling install:
+  ```powershell
+  choco install cmake
+  choco install ninja
+  ```
+- Intel oneAPI HPC Toolkit 2025 (includes ifx/icx, MKL).
+- Visual Studio 2022 with Desktop C++ workload (oneAPI supports only VS 2022 or 2019; use 2022 here).
+
 ## One-click flow (run from repo root)
 
 ```powershell
@@ -18,7 +28,6 @@ This folder packages the Windows native oneAPI workflow for Quantum ESPRESSO (QE
 
 - `qe-win-cmake-generation.patch` — CMake helpers, Fortran include preprocessing without shell redirection, git-rev header generation
 - `qe-win-c-portability.patch` — Windows portability fixes in QE C sources
-- `qe-win-submodules.patch` — submodule pointer updates (e.g., external/d3q, external/devxlib)
 
 Manual apply if needed:
 ```powershell
@@ -54,7 +63,6 @@ toolchains/quantum_espresso/windows/oneapi/
   patches/
     qe-win-cmake-generation.patch
     qe-win-c-portability.patch
-    qe-win-submodules.patch
   tests/   (placeholder)
 ```
 

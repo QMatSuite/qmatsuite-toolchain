@@ -1,0 +1,60 @@
+diff --git a/external/devxlib/src/timer.c b/external/devxlib/src/timer.c
+index 6d8e5e3d3..7b2c2af44 100644
+--- a/external/devxlib/src/timer.c
++++ b/external/devxlib/src/timer.c
+@@
+-#include <time.h>
+-
+-#include <sys/types.h>
+-#include <sys/times.h>
+-#include <sys/time.h>
+-
+-
+-// returns wallclock time in seconds
+-double wallclock_c(void)
+-{       
+-  struct timeval tv;
+-  struct timezone tz;   
+-  double t;             
+-
+-  gettimeofday(&tv, &tz);
+-                        
+-  t = (double)tv.tv_sec;
+-  t += ((double)tv.tv_usec)/1000000.0; 
+-
+-  return t;
+-}
++#if defined(_WIN32)
++#include <windows.h>
++
++/* Returns wallclock time in seconds using high-resolution Windows timers */
++double wallclock_c(void)
++{
++  LARGE_INTEGER freq, counter;
++  QueryPerformanceFrequency(&freq);
++  QueryPerformanceCounter(&counter);
++  return (double)counter.QuadPart / (double)freq.QuadPart;
++}
++
++#else
++#include <time.h>
++#include <sys/types.h>
++#include <sys/times.h>
++#include <sys/time.h>
++
++/* Returns wallclock time in seconds using gettimeofday */
++double wallclock_c(void)
++{       
++  struct timeval tv;
++  struct timezone tz;   
++  double t;             
++
++  gettimeofday(&tv, &tz);
++                        
++  t = (double)tv.tv_sec;
++  t += ((double)tv.tv_usec)/1000000.0; 
++
++  return t;
++}
++#endif
+

@@ -147,7 +147,6 @@ You should find:
 - Patch files:
   - `qe-win-cmake-generation.patch` – CMake/build helpers, Fortran include preprocessing, git-rev generation
   - `qe-win-c-portability.patch` – Windows portability fixes in C sources
-  - `qe-win-submodules.patch` – submodule pointer updates (external/d3q, external/devxlib)
 - Always clone QE via git with submodules:
   ```powershell
   git clone --recursive https://github.com/QEF/q-e.git

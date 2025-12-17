@@ -1,15 +1,9 @@
-$ErrorActionPreference = 'Stop'
-
 param(
-    [string]$QeDir = $null,
-    [string]$PatchDir = $null
+    [string]$QeDir   = "upstream/qe",
+    [string]$PatchDir = "patches"
 )
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$OneApiRoot = Split-Path $ScriptDir -Parent  # .../windows/oneapi
-
-if (-not $QeDir)    { $QeDir    = Join-Path $OneApiRoot "upstream/qe" }
-if (-not $PatchDir) { $PatchDir = Join-Path $OneApiRoot "patches" }
+$ErrorActionPreference = 'Stop'
 
 function Resolve-RepoPath {
     param([string]$Path)
@@ -18,7 +12,7 @@ function Resolve-RepoPath {
     return $resolved.Path
 }
 
-$QePath    = Resolve-RepoPath $QeDir
+$QePath = Resolve-RepoPath $QeDir
 $PatchPath = Resolve-RepoPath $PatchDir
 
 if (-not (Test-Path (Join-Path $QePath ".git"))) {
@@ -28,7 +22,7 @@ if (-not (Test-Path (Join-Path $QePath ".git"))) {
 $patches = @(
     "qe-win-cmake-generation.patch",
     "qe-win-c-portability.patch",
-    "qe-win-submodules.patch"
+    "qe-win-devxlib-timer.patch"
 )
 
 function Apply-OnePatch {
@@ -46,6 +40,7 @@ function Apply-OnePatch {
         return
     }
 
+    # Check if already applied
     & git -C $QePath apply --reverse --check $full
     if ($LASTEXITCODE -eq 0) {
         Write-Host "Skipping (already applied): $PatchFile"
