@@ -1,0 +1,341 @@
+diff --git a/LAXlib/CMakeLists.txt b/LAXlib/CMakeLists.txt
+index 12e6da2bc..e3950bd32 100644
+--- a/LAXlib/CMakeLists.txt
++++ b/LAXlib/CMakeLists.txt
+@@ -61,7 +61,7 @@ set(lax_include_dir ${CMAKE_CURRENT_BINARY_DIR}/include)
+ foreach(in_h ${in_headers})
+     get_filename_component(in_h_basename ${in_h} NAME_WE)
+     set(out_h "${lax_include_dir}/${in_h_basename}.fh")
+-    qe_preprocess_source(${CMAKE_CURRENT_SOURCE_DIR}/${in_h} ${out_h})
++    qe_prepare_fortran_include(${out_h} "${CMAKE_CURRENT_SOURCE_DIR}/${in_h}")
+     list(APPEND out_headers ${out_h})
+ endforeach()
+ add_custom_target(qe_lax_headers
+diff --git a/cmake/GitInfo.cmake b/cmake/GitInfo.cmake
+index 5ef0d2768..e01578d7a 100644
+--- a/cmake/GitInfo.cmake
++++ b/cmake/GitInfo.cmake
+@@ -1,86 +1,100 @@
+ set(GITREV_BARE_FILE git-rev.h)
+-set(GITREV_BARE_TMP git-rev-tmp.h)
+ set(GITREV_FILE ${qe_BINARY_DIR}/${GITREV_BARE_FILE})
+-set(GITREV_TMP ${qe_BINARY_DIR}/${GITREV_BARE_TMP})
+ 
+-# Always clean up git-rev-tmp.h file when cmake is run
+-execute_process(COMMAND ${CMAKE_COMMAND} -E remove ${GITREV_TMP})
+-
+-# The following custom command picks up changes to the git revision information
+-# every time the project is rebuilt. Even if the repository is updated (git pull)
+-# without re-running cmake. It also appends '-dirty' to the commit hash if there are
+-# unsaved changes to the repository.
+-#
+-# To avoid triggering a relink every time, the repository info is saved to
+-# a temporary file, and the temporary file is copied over the actual file
+-# only if the contents changed (using 'copy_if_different').
+-# The temporary file is deleted to force the custom command to run on
+-# the next build.
+-#
+-# Apparently custom commands need to be defined where the output is used.
+-# If this in the main CMakeLists.txt it does not work.
+-
+-# Sed flags were once an issue and some HPC have old sed's
+-set(SED_FLAG "-E")
+-execute_process(COMMAND "sed" ${SED_FLAG} "s/\"/\\\\\"/g" "<${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt" OUTPUT_QUIET
+-                ERROR_VARIABLE SED_ERROR)
+-if(SED_ERROR MATCHES ".*invalid.*")
+-    set(SED_FLAG "-r")
+-    execute_process(COMMAND "sed" ${SED_FLAG} "s/\"/\\\\\"/g" "<${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt"
+-                            OUTPUT_QUIET ERROR_QUIET ERROR_VARIABLE SED_ERROR)
+-    if(SED_ERROR MATCHES ".*invalid.*")
+-        message(
+-            WARNING
+-                "Your system supports neither the sed -E or -r flag, git revision information will not be included in output"
+-        )
+-    else(SED_ERROR MATCHES ".*invalid.*")
+-        message("   sed supports -r")
+-    endif(SED_ERROR MATCHES ".*invalid.*")
+-else(SED_ERROR MATCHES ".*invalid.*")
+-    message("   sed supports -E")
+-endif(SED_ERROR MATCHES ".*invalid.*")
++# Generate git-rev.h without shell pipes/redirection for cross-platform builds
++set(GITREV_SCRIPT ${qe_BINARY_DIR}/cmake/git_rev_generate.cmake)
++file(MAKE_DIRECTORY ${qe_BINARY_DIR}/cmake)
++set(_git_dollar "$")
++file(WRITE ${GITREV_SCRIPT}
++    "cmake_minimum_required(VERSION 3.16)\n"
++    "set(branch \"UNKNOWN\")\n"
++    "set(hash \"UNKNOWN\")\n"
++    "set(date \"UNKNOWN\")\n"
++    "set(subject \"UNKNOWN\")\n"
++    "if(EXISTS \"${_git_dollar}{qe_SOURCE_DIR}/.git\" AND GIT_EXECUTABLE)\n"
++    "  execute_process(COMMAND \"${_git_dollar}{GIT_EXECUTABLE}\" rev-parse --abbrev-ref HEAD\n"
++    "    OUTPUT_VARIABLE branch\n"
++    "    OUTPUT_STRIP_TRAILING_WHITESPACE\n"
++    "    RESULT_VARIABLE rv_branch)\n"
++    "  if(rv_branch)\n"
++    "    set(branch \"UNKNOWN\")\n"
++    "  endif()\n"
++    "  execute_process(COMMAND \"${_git_dollar}{GIT_EXECUTABLE}\" describe --always --dirty --abbrev=40 --match=NoTagWithThisName\n"
++    "    OUTPUT_VARIABLE hash_full\n"
++    "    OUTPUT_STRIP_TRAILING_WHITESPACE\n"
++    "    RESULT_VARIABLE rv_hash)\n"
++    "  if(NOT rv_hash)\n"
++    "    set(hash \"${_git_dollar}{hash_full}\")\n"
++    "  else()\n"
++    "    execute_process(COMMAND \"${_git_dollar}{GIT_EXECUTABLE}\" rev-parse --short HEAD\n"
++    "      OUTPUT_VARIABLE hash\n"
++    "      OUTPUT_STRIP_TRAILING_WHITESPACE\n"
++    "      RESULT_VARIABLE rv_hash_short)\n"
++    "    if(rv_hash_short)\n"
++    "      set(hash \"UNKNOWN\")\n"
++    "    endif()\n"
++    "  endif()\n"
++    "  execute_process(COMMAND \"${_git_dollar}{GIT_EXECUTABLE}\" log -1 --format=%ad\n"
++    "    OUTPUT_VARIABLE date\n"
++    "    OUTPUT_STRIP_TRAILING_WHITESPACE\n"
++    "    RESULT_VARIABLE rv_date)\n"
++    "  if(rv_date)\n"
++    "    set(date \"UNKNOWN\")\n"
++    "  endif()\n"
++    "  execute_process(COMMAND \"${_git_dollar}{GIT_EXECUTABLE}\" log -1 --format=%s\n"
++    "    OUTPUT_VARIABLE subject\n"
++    "    OUTPUT_STRIP_TRAILING_WHITESPACE\n"
++    "    RESULT_VARIABLE rv_subject)\n"
++    "  if(rv_subject)\n"
++    "    set(subject \"UNKNOWN\")\n"
++    "  endif()\n"
++    "endif()\n"
++    "string(REPLACE \"\\\"\" \"\\\\\\\"\" subject_escaped \"${_git_dollar}{subject}\")\n"
++    "file(WRITE \"${_git_dollar}{GITREV_FILE}\"\n"
++    "  \"#define GIT_BRANCH_RAW \\\"${_git_dollar}{branch}\\\"\\n\"\n"
++    "  \"#define GIT_HASH_RAW \\\"${_git_dollar}{hash}\\\"\\n\"\n"
++    "  \"#define GIT_COMMIT_LAST_CHANGED_RAW \\\"${_git_dollar}{date}\\\"\\n\"\n"
++    "  \"#define GIT_COMMIT_SUBJECT_RAW \\\"${_git_dollar}{subject_escaped}\\\"\\n\")\n")
+ 
+ add_custom_target(gitrev
+-  COMMAND ${CMAKE_COMMAND} -E echo_append "#define GIT_BRANCH_RAW \"" > ${GITREV_TMP}
+-  COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD | sed "s/$/\"/" >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo_append "#define GIT_HASH_RAW \"" >> ${GITREV_TMP}
+-  COMMAND ${GIT_EXECUTABLE} describe --always --dirty --abbrev=40 --match="NoTagWithThisName" | sed "s/$/\"/" >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo_append "#define GIT_COMMIT_LAST_CHANGED_RAW \"" >> ${GITREV_TMP}
+-  COMMAND ${GIT_EXECUTABLE} log -1 --format=%ad | sed "s/$/\"/" >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo_append "#define GIT_COMMIT_SUBJECT_RAW \"" >> ${GITREV_TMP}
+-  COMMAND ${GIT_EXECUTABLE} log -1 --format=%s | cut -c 1-50 | sed ${SED_FLAG} "s/\"/\"\\/\\/'\"'\\/\\/\"/g" | tr -d "\\n" >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo_append "\"" >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E echo >> ${GITREV_TMP}
+-  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GITREV_TMP} ${GITREV_FILE}
+-  COMMAND ${CMAKE_COMMAND} -E remove ${GITREV_TMP}
+-  WORKING_DIRECTORY ${qe_SOURCE_DIR}
+-  VERBATIM)
+-
+-# Print some configure-time git info (useful for understanding what commits
+-# are in particular build for the nightly CDash reports)
+-
+-execute_process(
+-    COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
+-    OUTPUT_VARIABLE GIT_CONFIG_BRANCH
+-    WORKING_DIRECTORY ${qe_SOURCE_DIR} OUTPUT_STRIP_TRAILING_WHITESPACE)
+-message("   Git branch: ${GIT_CONFIG_BRANCH}")
++    COMMAND ${CMAKE_COMMAND}
++        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
++        -Dqe_SOURCE_DIR=${qe_SOURCE_DIR}
++        -DGITREV_FILE=${GITREV_FILE}
++        -P ${GITREV_SCRIPT}
++    WORKING_DIRECTORY ${qe_SOURCE_DIR}
++    VERBATIM)
+ 
+-# Breaking down the arguments to 'git describe'
+-#  --abbrev=40     Size of hash to print.  This should print the entire hash.
+-#  --dirty         Append hash with '-dirty' if there are uncommitted changes.
+-# The behavior of describe looks for a tag in the parents first, and then falls
+-# back to the commit hash (if --always is specified)
+-#  --always        Show the commit hash as fallback
+-#  --match="NoTagWithThisName"
+-#     If a tag is found, the output looks like:
+-#       second_annotated_tag-29-g1fd38cccc0fd2f683ec223ca0783bb671bfedd4e
+-#     In order to always get just the commit hash, specify a tag pattern
+-#     that should never match.
+-execute_process(
+-    COMMAND ${GIT_EXECUTABLE} describe --always --dirty --abbrev=40 --match="NoTagWithThisName"
+-    OUTPUT_VARIABLE GIT_CONFIG_COMMIT_HASH
+-    WORKING_DIRECTORY ${qe_SOURCE_DIR} OUTPUT_STRIP_TRAILING_WHITESPACE)
+-message("   Git commit hash: ${GIT_CONFIG_COMMIT_HASH}")
++# Print some configure-time git info without shell pipelines
++set(_git_branch "UNKNOWN")
++set(_git_hash "UNKNOWN")
++if(EXISTS "${qe_SOURCE_DIR}/.git" AND GIT_EXECUTABLE)
++    execute_process(
++        COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
++        OUTPUT_VARIABLE _git_branch
++        OUTPUT_STRIP_TRAILING_WHITESPACE
++        RESULT_VARIABLE _rv_branch
++        WORKING_DIRECTORY ${qe_SOURCE_DIR})
++    if(_rv_branch)
++        set(_git_branch "UNKNOWN")
++    endif()
++    execute_process(
++        COMMAND ${GIT_EXECUTABLE} describe --always --dirty --abbrev=40 --match="NoTagWithThisName"
++        OUTPUT_VARIABLE _git_hash
++        OUTPUT_STRIP_TRAILING_WHITESPACE
++        RESULT_VARIABLE _rv_hash
++        WORKING_DIRECTORY ${qe_SOURCE_DIR})
++    if(_rv_hash)
++        execute_process(
++            COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
++            OUTPUT_VARIABLE _git_hash
++            OUTPUT_STRIP_TRAILING_WHITESPACE
++            RESULT_VARIABLE _rv_hash_short
++            WORKING_DIRECTORY ${qe_SOURCE_DIR})
++        if(_rv_hash_short)
++            set(_git_hash "UNKNOWN")
++        endif()
++    endif()
++endif()
++message("   Git branch: ${_git_branch}")
++message("   Git commit hash: ${_git_hash}")
+diff --git a/cmake/qeHelpers.cmake b/cmake/qeHelpers.cmake
+index 4bc11ffc2..eb341c404 100644
+--- a/cmake/qeHelpers.cmake
++++ b/cmake/qeHelpers.cmake
+@@ -51,6 +51,88 @@ function(qe_preprocess_source IN OUT)
+         VERBATIM)    
+ endfunction(qe_preprocess_source)
+ 
++# Helper to generate Fortran include files (.fh/.inc) without shell redirection.
++# If no preprocessor directives are found, it copies; otherwise it preprocesses
++# using the Fortran compiler frontend with compiler-specific flags.
++function(qe_prepare_fortran_include OUT_FILE IN_FILE)
++    if(NOT DEFINED QE_PREPARE_FI_SCRIPT)
++        set(QE_PREPARE_FI_SCRIPT "${CMAKE_BINARY_DIR}/cmake/qe_prepare_fortran_include.cmake")
++        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/cmake")
++        set(_qe_dollar "$")
++        set(_qe_fi_script "cmake_minimum_required(VERSION 3.16)\n")
++        string(APPEND _qe_fi_script
++            "if(NOT DEFINED INPUT OR NOT DEFINED OUTPUT OR NOT DEFINED PP)\n"
++            "  message(FATAL_ERROR \"INPUT/OUTPUT/PP not set for qe_prepare_fortran_include\")\n"
++            "endif()\n"
++            "get_filename_component(_out_dir \"${_qe_dollar}{OUTPUT}\" DIRECTORY)\n"
++            "if(NOT EXISTS \"${_qe_dollar}{_out_dir}\")\n"
++            "  file(MAKE_DIRECTORY \"${_qe_dollar}{_out_dir}\")\n"
++            "endif()\n"
++            "set(_cmd \"${_qe_dollar}{PP}\")\n"
++            "if(PP_FLAGS)\n"
++            "  list(APPEND _cmd ${_qe_dollar}{PP_FLAGS})\n"
++            "endif()\n"
++            "if(PP_DEFINES)\n"
++            "  list(APPEND _cmd ${_qe_dollar}{PP_DEFINES})\n"
++            "endif()\n"
++            "list(APPEND _cmd \"${_qe_dollar}{INPUT}\")\n"
++            "execute_process(COMMAND ${_qe_dollar}{_cmd} OUTPUT_FILE \"${_qe_dollar}{OUTPUT}\" RESULT_VARIABLE _rv)\n"
++            "if(_rv)\n"
++            "  message(FATAL_ERROR \"Fortran preprocessing failed (code ${_qe_dollar}{_rv}) for ${_qe_dollar}{INPUT}\")\n"
++            "endif()\n")
++        file(WRITE ${QE_PREPARE_FI_SCRIPT} "${_qe_fi_script}")
++        set(QE_PREPARE_FI_SCRIPT ${QE_PREPARE_FI_SCRIPT} CACHE INTERNAL "")
++    endif()
++
++    file(STRINGS "${IN_FILE}" _cpp_lines REGEX "^[ \t]*#")
++    list(LENGTH _cpp_lines _cpp_count)
++
++    if(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
++        set(_pp_flags "-fpp;-E;-P")
++    elseif(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
++        set(_pp_flags "-cpp;-E;-P")
++    elseif(CMAKE_Fortran_COMPILER_ID MATCHES "PGI" OR CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC")
++        set(_pp_flags "-Mpreprocess;-E")
++    else()
++        set(_pp_flags "-E;-P")
++    endif()
++
++    qe_get_global_compile_definitions(_global_defs)
++    set(_pp_defines "")
++    foreach(_def ${_global_defs})
++        list(APPEND _pp_defines "-D${_def}")
++    endforeach()
++    string(REPLACE ";" "\\;" _pp_flags_arg "${_pp_flags}")
++    string(REPLACE ";" "\\;" _pp_defines_arg "${_pp_defines}")
++
++    get_filename_component(_out_dir ${OUT_FILE} DIRECTORY)
++    if(NOT EXISTS ${_out_dir})
++        file(MAKE_DIRECTORY ${_out_dir})
++    endif()
++
++    if(_cpp_count EQUAL 0)
++        add_custom_command(
++            OUTPUT ${OUT_FILE}
++            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${IN_FILE} ${OUT_FILE}
++            MAIN_DEPENDENCY ${IN_FILE}
++            COMMENT "Copying ${IN_FILE} -> ${OUT_FILE}"
++            VERBATIM)
++    else()
++        add_custom_command(
++            OUTPUT ${OUT_FILE}
++            COMMAND ${CMAKE_COMMAND}
++                -DINPUT:FILEPATH=${IN_FILE}
++                -DOUTPUT:FILEPATH=${OUT_FILE}
++                -DPP:FILEPATH=${CMAKE_Fortran_COMPILER}
++                -DPP_FLAGS:STRING=${_pp_flags_arg}
++                -DPP_DEFINES:STRING=${_pp_defines_arg}
++                -P ${QE_PREPARE_FI_SCRIPT}
++            MAIN_DEPENDENCY ${IN_FILE}
++            COMMENT "Preprocessing ${IN_FILE} -> ${OUT_FILE}"
++            VERBATIM)
++    endif()
++endfunction()
++
+ function(qe_fix_fortran_modules TGT)
+     set(targets ${TGT} ${ARGN})
+     foreach(tgt IN LISTS targets)
+@@ -109,11 +191,19 @@ function(qe_git_submodule_update PATH)
+         string(REGEX REPLACE " |\t" ";" DATABASE_OUTPUT ${DATABASE_STRING})
+         list(GET DATABASE_OUTPUT 2 DATABASE_HASH)
+ 
+-        # Extract submodule commit hash from saved records
+-        execute_process(COMMAND grep ${SUBMODULE_NAME} ${commit_hash_file}
+-                        OUTPUT_VARIABLE RECORD_STRING)
+-        string(REPLACE " " ";" RECORD_OUTPUT ${RECORD_STRING})
+-        list(GET RECORD_OUTPUT 0 RECORD_HASH)
++        # Extract submodule commit hash from saved records (Windows-safe)
++        # File format: <commit_hash> <submodule_name>
++        file(STRINGS ${commit_hash_file} RECORD_LINES)
++        set(RECORD_HASH "")
++        foreach(line IN LISTS RECORD_LINES)
++            if(line MATCHES "^([a-f0-9]+)[ \t]+${SUBMODULE_NAME}$")
++                set(RECORD_HASH ${CMAKE_MATCH_1})
++                break()
++            endif()
++        endforeach()
++        if(RECORD_HASH STREQUAL "")
++            message(FATAL_ERROR "Could not find commit hash for submodule '${SUBMODULE_NAME}' in ${commit_hash_file}")
++        endif()
+ 
+         if(NOT DATABASE_HASH STREQUAL RECORD_HASH)
+           message(FATAL_ERROR "If you are a user, please file a bug report! "
+@@ -143,11 +233,19 @@ function(qe_git_submodule_update PATH)
+                                 WORKING_DIRECTORY ${qe_SOURCE_DIR}
+                                 OUTPUT_STRIP_TRAILING_WHITESPACE)
+ 
+-                # Extract submodule commit hash from saved records
+-                execute_process(COMMAND grep ${SUBMODULE_NAME} ${commit_hash_file}
+-                                OUTPUT_VARIABLE RECORD_STRING)
+-                string(REPLACE " " ";" RECORD_OUTPUT ${RECORD_STRING})
+-                list(GET RECORD_OUTPUT 0 RECORD_HASH)
++                # Extract submodule commit hash from saved records (Windows-safe)
++                # File format: <commit_hash> <submodule_name>
++                file(STRINGS ${commit_hash_file} RECORD_LINES)
++                set(RECORD_HASH "")
++                foreach(line IN LISTS RECORD_LINES)
++                    if(line MATCHES "^([a-f0-9]+)[ \t]+${SUBMODULE_NAME}$")
++                        set(RECORD_HASH ${CMAKE_MATCH_1})
++                        break()
++                    endif()
++                endforeach()
++                if(RECORD_HASH STREQUAL "")
++                    message(FATAL_ERROR "Could not find commit hash for submodule '${SUBMODULE_NAME}' in ${commit_hash_file}")
++                endif()
+ 
+                 message(STATUS "Cloning ${SUBMODULE_URL} into ${qe_SOURCE_DIR}/${PATH}.")
+ 

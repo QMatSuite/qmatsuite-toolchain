@@ -1,4 +1,4 @@
-# QE on Windows
+# QE on Windows (MinGW)
 
 Windows-specific build notes and scripts for Quantum ESPRESSO.
 
@@ -69,9 +69,9 @@ To build QE on Windows locally using the same toolchain:
 
 ## Patches
 
-The build process uses patches from the [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-quantum-espresso) to fix MinGW-specific build issues. These patches are stored locally in `toolchains/quantum_espresso/windows/patches/` and are automatically applied during the CI build.
+The build process uses patches from the [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-quantum-espresso) to fix MinGW-specific build issues. These patches are stored locally in `toolchains/quantum_espresso/windows/mingw/patches/` and are automatically applied during the CI build.
 
-See `toolchains/quantum_espresso/windows/patches/README.md` for details about each patch.
+See `toolchains/quantum_espresso/windows/mingw/patches/README.md` for details about each patch.
 
 ## Patch Application Notes
 

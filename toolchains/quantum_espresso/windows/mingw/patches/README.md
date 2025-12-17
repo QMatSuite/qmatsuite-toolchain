@@ -42,7 +42,7 @@ These patches are automatically applied by the CI workflow (`.github/workflows/q
 To update patches from the MSYS2 repository:
 
 ```bash
-cd toolchains/quantum_espresso/windows/patches
+cd toolchains/quantum_espresso/windows/mingw/patches
 curl -L -o 001-use-srand-instead-of-srandom.patch "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/001-use-srand-instead-of-srandom.patch"
 curl -L -o 002-fix-build-devxlib-on-mingw.patch "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/002-fix-build-devxlib-on-mingw.patch"
 curl -L -o 003-fix-install-c-libraries.patch "https://raw.githubusercontent.com/msys2/MINGW-packages/master/mingw-w64-quantum-espresso/003-fix-install-c-libraries.patch"

@@ -5,13 +5,15 @@ on:
     branches: [ main ]
     paths:
       - '.github/workflows/wannier90-windows-mingw.yml'
-      - 'toolchains/wannier90/windows/**'
+      - 'toolchains/wannier90/windows/mingw/**'
+      - 'toolchains/wannier90/windows/README.md'
       - 'toolchains/wannier90/README.md'
   pull_request:
     branches: [ main ]
     paths:
       - '.github/workflows/wannier90-windows-mingw.yml'
-      - 'toolchains/wannier90/windows/**'
+      - 'toolchains/wannier90/windows/mingw/**'
+      - 'toolchains/wannier90/windows/README.md'
       - 'toolchains/wannier90/README.md'
 
 jobs:
@@ -76,7 +78,7 @@ jobs:
       - name: Configure Wannier90 (copy make.inc)
         run: |
           cd "$W90_SRC_DIR"
-          cp "$GITHUB_WORKSPACE/toolchains/wannier90/windows/make.inc" ./make.inc
+          cp "$GITHUB_WORKSPACE/toolchains/wannier90/windows/mingw/make.inc" ./make.inc
           test -f ./make.inc || (echo "make.inc not found!" && exit 1)
           echo "make.inc contents:"
           cat ./make.inc

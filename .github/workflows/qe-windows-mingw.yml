@@ -5,13 +5,15 @@ on:
     branches: [ main ]
     paths:
       - ".github/workflows/qe-windows-mingw.yml"
-      - "toolchains/quantum_espresso/windows/**"
+      - "toolchains/quantum_espresso/windows/mingw/**"
+      - "toolchains/quantum_espresso/windows/README.md"
       - "toolchains/quantum_espresso/README.md"
   pull_request:
     branches: [ main ]
     paths:
       - ".github/workflows/qe-windows-mingw.yml"
-      - "toolchains/quantum_espresso/windows/**"
+      - "toolchains/quantum_espresso/windows/mingw/**"
+      - "toolchains/quantum_espresso/windows/README.md"
       - "toolchains/quantum_espresso/README.md"
 
 jobs:
@@ -93,7 +95,7 @@ jobs:
           cd "$QE_SRC_DIR"
 
           # Use local patches from repository
-          PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/patches"
+          PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/mingw/patches"
           echo "Using patches from: $PATCH_DIR"
           
           if [ ! -d "$PATCH_DIR" ]; then
@@ -155,7 +157,7 @@ jobs:
           cd "$QE_SRC_DIR"
 
           # Apply patches 002-004 after CMake config (files are downloaded during CMake config)
-          PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/patches"
+          PATCH_DIR="$GITHUB_WORKSPACE/toolchains/quantum_espresso/windows/mingw/patches"
           
           # -N: don't apply if already applied
           # -b: backup original files

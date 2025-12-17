@@ -45,7 +45,7 @@ If you want to use this patch (e.g., to build executables without the `.x` suffi
 
 ```bash
 cd "$W90_SRC_DIR"
-patch -Nbp1 -i "$GITHUB_WORKSPACE/toolchains/wannier90/windows/patches/001-fix-build-on-mingw.patch"
+patch -Nbp1 -i "$GITHUB_WORKSPACE/toolchains/wannier90/windows/mingw/patches/001-fix-build-on-mingw.patch"
 ```
 
 Then build with `EXE_EXT=` to create executables without the `.x` suffix:
