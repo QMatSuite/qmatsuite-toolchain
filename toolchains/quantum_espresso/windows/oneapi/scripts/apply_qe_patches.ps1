@@ -21,8 +21,7 @@ if (-not (Test-Path (Join-Path $QePath ".git"))) {
 
 $patches = @(
     "qe-win-cmake-generation.patch",
-    "qe-win-c-portability.patch",
-    "qe-win-devxlib-timer.patch"
+    "qe-win-c-portability.patch"
 )
 
 function Apply-OnePatch {
@@ -53,6 +52,13 @@ function Apply-OnePatch {
 foreach ($p in $patches) {
     Apply-OnePatch -PatchFile $p
 }
+
+# Replace devxlib timer.c directly (avoids patch application issues on CI)
+$srcTimer = Join-Path $PatchPath "devxlib-timer.c"
+$dstTimer = Join-Path $QePath "external/devxlib/src/timer.c"
+if (-not (Test-Path $srcTimer)) { throw "Patched timer not found: $srcTimer" }
+Write-Host "Overwriting devxlib timer.c with patched version"
+Copy-Item -Path $srcTimer -Destination $dstTimer -Force
 
 Write-Host "All patches processed successfully."
 
