@@ -693,6 +693,107 @@ function Run-SmokeTest {
     }
 }
 
+function Get-StackReserveLine {
+    param(
+        [string]$DumpbinPath,
+        [string]$PwExe
+    )
+    
+    # Use PowerShell's native filtering to avoid stdout deadlock
+    # Run dumpbin and pipe directly to Select-String for filtering
+    # This avoids cmd.exe escaping issues and works reliably
+    try {
+        # Run dumpbin with stderr redirected, pipe to Select-String for filtering
+        $output = & $DumpbinPath /headers $PwExe 2>&1 | Select-String -Pattern "size of stack reserve" -CaseSensitive:$false
+        
+        if ($output) {
+            # Select-String returns MatchInfo objects
+            if ($output -is [array]) {
+                # Multiple matches - take the first one (should be only one anyway)
+                $line = $output[0].Line
+            } else {
+                $line = $output.Line
+            }
+            return $line.Trim()
+        }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+function Show-PostBuildDiagnostics {
+    param(
+        [string]$BuildBin,
+        [string]$BuildDir
+    )
+    
+    Write-Host "=== Post-build diagnostics (from staging) ===" -ForegroundColor Cyan
+    
+    # Find pw.exe
+    $pwExe = Join-Path $BuildBin "pw.exe"
+    if (-not (Test-Path $pwExe)) {
+        $pwExe = Join-Path $BuildBin "pw.x.exe"
+    }
+    
+    if (-not (Test-Path $pwExe)) {
+        Write-Warning "pw.exe not found for stack reserve check (searched: $BuildBin\pw.exe, $BuildBin\pw.x.exe)"
+    } else {
+        Write-Host "pw.exe path: $pwExe"
+        
+        # Resolve dumpbin using existing logic
+        $dumpbinPath = Ensure-DumpbinInPath
+        if (-not $dumpbinPath) {
+            Write-Warning "dumpbin.exe not found, skipping stack reserve check"
+        } else {
+            Write-Host "Stack reserve size:"
+            try {
+                $line = Get-StackReserveLine -DumpbinPath $dumpbinPath -PwExe $pwExe
+                if ($line) {
+                    Write-Host "  $line"
+                    
+                    # Parse hex value and convert to MB
+                    # Pattern matches: optional whitespace, hex digits, whitespace, "size of stack reserve"
+                    if ($line -match "\s*([0-9A-Fa-f]+)\s+size of stack reserve") {
+                        $hexValue = $Matches[1]
+                        try {
+                            $bytes = [Convert]::ToInt64($hexValue, 16)
+                            $mb = [math]::Round($bytes / 1MB, 2)
+                            Write-Host "  Interpreted: $mb MB ($hexValue hex = $bytes bytes)"
+                        } catch {
+                            Write-Host "  (Could not parse hex value: $hexValue)"
+                        }
+                    }
+                } else {
+                    Write-Warning "  Stack reserve line not found in dumpbin output"
+                }
+            } catch {
+                Write-Warning "  Failed to run dumpbin: $_"
+            }
+        }
+    }
+    
+    # Check CMakeCache.txt - build directory is parent of bin directory
+    $buildDirPath = Split-Path $BuildBin -Parent
+    $cmakeCache = Join-Path $buildDirPath "CMakeCache.txt"
+    
+    if (-not (Test-Path $cmakeCache)) {
+        Write-Warning "CMakeCache.txt not found at: $cmakeCache"
+    } else {
+        Write-Host "Relevant CMakeCache flags:"
+        $flags = Select-String -Path $cmakeCache -Pattern "CMAKE_Fortran_FLAGS_RELEASE:STRING=|CMAKE_EXE_LINKER_FLAGS:STRING=" | ForEach-Object { $_.Line }
+        if ($flags) {
+            foreach ($flag in $flags) {
+                Write-Host "  $flag"
+            }
+        } else {
+            Write-Warning "  No matching flags found in CMakeCache.txt"
+        }
+    }
+    
+    Write-Host ""
+}
+
 function Run-Probe {
     param(
         [string]$ExePath
@@ -809,6 +910,9 @@ if (-not (Test-Path $BuildBin)) {
 Write-Host "QE build bin : $BuildBin"
 Write-Host "Dist target  : $DistRoot"
 Write-Host "ONEAPI_ROOT  : $oneApiRoot"
+
+# Show post-build diagnostics
+Show-PostBuildDiagnostics -BuildBin $BuildBin -BuildDir $BuildDir
 
 if ($Clean -and (Test-Path $DistRoot)) {
     if ($PSCmdlet.ShouldProcess($DistRoot, "Clean dist folder") -and -not $WhatIf) {

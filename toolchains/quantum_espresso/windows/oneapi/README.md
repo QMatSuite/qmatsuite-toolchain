@@ -596,11 +596,17 @@ Therefore, we decided to standardize on external Intel MKL for BLAS/LAPACK on th
 - Simplified build configuration (no need to compile LAPACK from source)
 - Consistent behavior across local development and CI environments
 
-### Runtime crash: forrtl severe (170) stack overflow (pw.exe)
+### Troubleshooting: forrtl severe (170) stack overflow
 
 #### Symptom
 
-Build succeeds, but `pw.exe` crashes immediately on simple input with `forrtl: severe (170): stack overflow`. The crash happens right after PWSCF prints the "Current dimensions…" banner.
+Build succeeds, but `pw.exe` crashes immediately on simple input with:
+
+```
+forrtl: severe (170): Program Exception - stack overflow
+```
+
+The crash can happen even on tiny inputs (e.g., a minimal `pw.x` SCF test) right after PWSCF prints the "Current dimensions…" banner. This occurs because QE/FFTs may allocate large automatic arrays on the stack in some code paths, and Windows default thread stack is small (typically 1MB).
 
 Example crash output:
 
@@ -620,51 +626,80 @@ forrtl: severe (170): Program Exception - stack overflow
 Image              PC                Routine            Line        Source
 
 pw.exe             00007FF7CEF20D07  Unknown               Unknown  Unknown
-
-pw.exe             00007FF7CE60C006  Unknown               Unknown  Unknown
-
-pw.exe             00007FF7CE526C0B  Unknown               Unknown  Unknown
-
-pw.exe             00007FF7CE5250D2  Unknown               Unknown  Unknown
-
-pw.exe             00007FF7CE521190  Unknown               Unknown  Unknown
-
-pw.exe             00007FF7CEF17B2B  Unknown               Unknown  Unknown
-
-pw.exe             00007FF7CEF20C30  Unknown               Unknown  Unknown
-
-KERNEL32.DLL       00007FFA4A77E8D7  Unknown               Unknown  Unknown
-
-ntdll.dll          00007FFA4AA6C53C  Unknown               Unknown  Unknown
+...
 ```
 
-#### Root Cause
+#### Fix: -heap-arrays (required)
 
-This is a **stack overflow**, not floating-point overflow. Windows default thread stack is small (typically 1MB), and QE/Fortran can allocate large automatic arrays and temporary arrays on the stack. This triggers the crash early in runtime when these arrays are allocated.
+**The effective fix is enabling Intel Fortran flag `-heap-arrays`.** This moves large temporary/automatic arrays from stack to heap, preventing stack overflow. This should be treated as **standard for Windows oneAPI builds** (not a one-off hack).
 
-#### Fix
-
-The fix is implemented in `scripts/build_qe_win_oneapi.ps1` and includes:
-
-1. **Use Intel Fortran `-heap-arrays` flag** - Forces large automatic arrays and temporaries to be allocated on the heap instead of the stack
-2. **Increase Windows executable stack reserve** - Set linker flag `/STACK:134217728` (128MB) to provide more stack space
-3. **Add `-traceback` in Debug builds** - Improves diagnostic backtraces for debugging
-
-The relevant CMake configure flags are:
+The build script (`scripts/build_qe_win_oneapi.ps1`) sets:
 
 ```cmake
 -DCMAKE_Fortran_FLAGS_RELEASE="-heap-arrays"
 -DCMAKE_Fortran_FLAGS_DEBUG="-heap-arrays -traceback"
--DCMAKE_EXE_LINKER_FLAGS="/STACK:134217728"
 ```
 
-**Why 128MB:** We confirmed 256MB also works, and it generally has no practical downside because stack reserve is mostly virtual address space. We chose 128MB as a more conservative, still-safe default for distribution; it's large enough for QE while avoiding an unnecessarily large reserve. The `-heap-arrays` flag is the primary fix; the stack reserve is a defensive safeguard.
+**Why this works:** Instead of allocating large arrays on the limited stack, the compiler allocates them on the heap, which has much more available space. This is the primary and required fix.
 
-**Note:** This change is intentionally minimal and does not alter MKL/BLAS/LAPACK discovery behavior. The build script still uses the same MKL detection logic as before.
+#### Optional hardening: 128 MB stack reserve
+
+**What fooled us:** We initially thought increasing stack size fixed the issue. But diagnostics showed the binary still had 1 MB stack reserve, meaning stack flags were not actually applied (or we were inspecting a stale/renamed binary). The real improvement came from `-heap-arrays`, and CI failures were also caused by cached builds not being refreshed.
+
+**How to actually set stack reserve (optional but recommended):**
+
+Setting `CMAKE_EXE_LINKER_FLAGS="/STACK:..."` alone may not reliably propagate through the `ifx` driver in some setups, and/or may be defeated by stale `pw.exe` produced by rename logic.
+
+**Works (recommended):**
+
+Use Intel driver pass-through to ensure the flag reaches the linker:
+
+```cmake
+-DCMAKE_EXE_LINKER_FLAGS="/STACK:134217728 -Qoption,link,/STACK:134217728"
+```
+
+The `-Qoption,link,/STACK:134217728` form passes the flag directly through the Intel Fortran driver to the MSVC linker, ensuring it's applied even when the direct `/STACK:...` form might be ignored.
+
+**Implementation:** The build script now sets both flags (belt-and-suspenders approach) and ensures `pw.exe` is always overwritten from `pw.x.exe` to prevent stale binaries.
+
+**Why 128MB:** We confirmed 256MB also works, and it generally has no practical downside because stack reserve is mostly virtual address space. We chose 128MB as a more conservative, still-safe default for distribution; it's large enough for QE while avoiding an unnecessarily large reserve. **Note:** The `-heap-arrays` flag is the primary fix; the stack reserve is a defensive safeguard.
 
 #### Verification
 
-After applying these flags, `pw.exe` should pass the minimal `scf-cg.in` test without the immediate stack overflow crash.
+**Check stack reserve in the built executable:**
+
+```powershell
+dumpbin /headers bin\pw.exe | findstr /i "size of stack reserve"
+```
+
+**Expected output:**
+```
+8000000 size of stack reserve
+```
+
+This indicates 128 MB (0x8000000 hex = 134217728 bytes = 128 MB).
+
+**Confirm CMakeCache contains the correct flags:**
+
+```powershell
+Select-String -Path build-win-oneapi\CMakeCache.txt -Pattern "CMAKE_Fortran_FLAGS_RELEASE:STRING=|CMAKE_EXE_LINKER_FLAGS:STRING="
+```
+
+**Expected:**
+```
+CMAKE_Fortran_FLAGS_RELEASE:STRING=-heap-arrays
+CMAKE_EXE_LINKER_FLAGS:STRING=/STACK:134217728 -Qoption,link,/STACK:134217728
+```
+
+**Note:** The staging script (`stage_qe_windows.ps1`) automatically prints these diagnostics in the "Post-build diagnostics (from staging)" section, so you can verify both the stack reserve and CMakeCache flags without manual commands.
+
+#### CI cache note
+
+If CI uses cached build directories, changes to build flags may not take effect unless:
+- Cache keys include script hashes (so cache invalidates when build scripts change), or
+- You run with a clean build (use the `clean_build` workflow input in GitHub Actions)
+
+The CI workflow now includes script hashes in the cache key and provides a `clean_build` option to force a fresh build when needed.
 
 ### Runtime error: Missing MKL DLLs (mkl_avx2.2.dll, mkl_def.2.dll)
 

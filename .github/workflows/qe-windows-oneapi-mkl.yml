@@ -246,35 +246,8 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" -NoMpi
 
-      - name: Post-build diagnostics
-        run: |
-          $pwExe = Join-Path $env:QE_SRC "build-win-oneapi\bin\pw.exe"
-          $cmakeCache = Join-Path $env:QE_SRC "build-win-oneapi\CMakeCache.txt"
-          
-          Write-Host "=== Post-build diagnostics ===" -ForegroundColor Cyan
-          
-          # Check stack reserve size
-          if (Test-Path $pwExe) {
-            Write-Host "Stack reserve size of pw.exe:"
-            $dumpbinPath = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
-            if ($dumpbinPath) {
-              & $dumpbinPath.Source /headers $pwExe | Select-String -Pattern "size of stack reserve" -CaseSensitive:$false
-            } else {
-              Write-Warning "dumpbin.exe not found, skipping stack reserve check"
-            }
-          } else {
-            Write-Warning "pw.exe not found at: $pwExe"
-          }
-          
-          # Check CMakeCache flags
-          if (Test-Path $cmakeCache) {
-            Write-Host "Relevant CMakeCache flags:"
-            Select-String -Path $cmakeCache -Pattern "CMAKE_Fortran_FLAGS_RELEASE:STRING=|CMAKE_EXE_LINKER_FLAGS:STRING=" | ForEach-Object { $_.Line }
-          } else {
-            Write-Warning "CMakeCache.txt not found at: $cmakeCache"
-          }
-
       - name: Stage QE executables and runtime DLLs
+        id: stage
         continue-on-error: true
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
@@ -290,4 +263,10 @@ jobs:
           name: qe-windows-oneapi-dist
           path: toolchains/quantum_espresso/windows/oneapi/dist/win-oneapi/**
           retention-days: 7
+
+      - name: Fail if staging failed
+        if: steps.stage.outcome == 'failure'
+        run: |
+          Write-Error "Staging failed (smoke test or other error). Artifact uploaded for inspection."
+          exit 1
 

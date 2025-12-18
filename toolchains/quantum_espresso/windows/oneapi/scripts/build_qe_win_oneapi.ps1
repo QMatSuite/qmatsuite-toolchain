@@ -308,7 +308,8 @@ $cmakeConfigure = @(
     "-DCMAKE_C_COMPILER=`"$icxPath`"",          # Intel C compiler (full path)
     "-DCMAKE_Fortran_FLAGS_RELEASE=`"-heap-arrays`"",  # Use heap arrays for Release (fix stack overflow)
     "-DCMAKE_Fortran_FLAGS_DEBUG=`"-heap-arrays -traceback`"",  # Use heap arrays + traceback for Debug
-    "-DCMAKE_EXE_LINKER_FLAGS=`"/STACK:134217728`"",  # Increase stack size to 128MB (fix stack overflow)
+    "-DCMAKE_EXE_LINKER_FLAGS=`"/STACK:134217728 -Qoption,link,/STACK:134217728`"",  # Increase stack size to 128MB (fix stack overflow) - both direct and Intel pass-through
+    "-DCMAKE_SHARED_LINKER_FLAGS=`"/STACK:134217728 -Qoption,link,/STACK:134217728`"",  # Also apply to shared modules
     "-DCMAKE_Fortran_COMPILER_FORCED=TRUE", # Skip Fortran compiler test (known CMake issue with ifx)
     "-DQE_CPP=`"$icxPath`"",                    # Use icx as C preprocessor (QE requirement)
     "-DQE_ENABLE_MPI=$mpiFlag",        # MPI support (ON/OFF)
@@ -436,21 +437,105 @@ if (Test-Path $binDir) {
     Get-ChildItem -Path $binDir -Filter "*.x.exe" | ForEach-Object {
         $newName = $_.Name -replace '\.x\.exe$', '.exe'
         $newPath = Join-Path $binDir $newName
+        # Always overwrite existing .exe with newly built .x.exe to prevent stale binaries
         if (Test-Path $newPath) {
-            Write-Host "  Skipping $($_.Name) - $newName already exists" -ForegroundColor Gray
+            # Compare timestamps - if .x.exe is newer or same, replace
+            $xExeTime = $_.LastWriteTime
+            $exeTime = (Get-Item $newPath).LastWriteTime
+            if ($xExeTime -ge $exeTime) {
+                Remove-Item -Path $newPath -Force -ErrorAction SilentlyContinue
+                Copy-Item -Path $_.FullName -Destination $newPath -Force
+                Write-Host "  Replaced: $newName (with newly built $($_.Name))" -ForegroundColor Green
+                $renamedCount++
+            } else {
+                Write-Host "  Warning: $newName is newer than $($_.Name), keeping existing" -ForegroundColor Yellow
+            }
         } else {
-            Rename-Item -Path $_.FullName -NewName $newName -Force
+            Copy-Item -Path $_.FullName -Destination $newPath -Force
             Write-Host "  Renamed: $($_.Name) -> $newName" -ForegroundColor Green
             $renamedCount++
         }
     }
     if ($renamedCount -gt 0) {
-        Write-Host "  Renamed $renamedCount executable(s)" -ForegroundColor Green
+        Write-Host "  Processed $renamedCount executable(s)" -ForegroundColor Green
     } else {
         Write-Host "  No executables to rename (already renamed or none found)" -ForegroundColor Gray
     }
 } else {
     Write-Host "  Warning: bin directory not found at $binDir" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "Step 10: Verifying stack reserve in link command..." -ForegroundColor Yellow
+$pwXExe = Join-Path $binDir "pw.x.exe"
+if (Test-Path $pwXExe) {
+    # Check if ninja build log contains the stack reserve flag
+    # The verbose build output should have been shown, but we can check the actual executable
+    # by looking for the flag in recent build output or checking the executable directly
+    Write-Host "  Checking link command for /STACK:134217728..." -ForegroundColor Gray
+    # Since we used --verbose, the link command was already shown
+    # We'll verify by checking the actual executable with dumpbin (if available)
+    $dumpbinPath = $null
+    if ($env:VCToolsInstallDir) {
+        $dumpbinPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\dumpbin.exe"
+        if (-not (Test-Path $dumpbinPath)) {
+            $dumpbinPath = $null
+        }
+    }
+    if (-not $dumpbinPath) {
+        # Try to find dumpbin in VS paths
+        $vsPaths = @(
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC",
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC"
+        )
+        foreach ($vsPath in $vsPaths) {
+            if (Test-Path $vsPath) {
+                $msvcVersions = Get-ChildItem $vsPath -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+                foreach ($version in $msvcVersions) {
+                    $candidate = Join-Path $version.FullName "bin\Hostx64\x64\dumpbin.exe"
+                    if (Test-Path $candidate) {
+                        $dumpbinPath = $candidate
+                        break
+                    }
+                }
+                if ($dumpbinPath) { break }
+            }
+        }
+    }
+    
+    if ($dumpbinPath) {
+        try {
+            $output = & $dumpbinPath /headers $pwXExe 2>&1 | Select-String -Pattern "size of stack reserve" -CaseSensitive:$false
+            if ($output) {
+                $line = if ($output -is [array]) { $output[0].Line } else { $output.Line }
+                Write-Host "  Stack reserve: $($line.Trim())" -ForegroundColor Green
+                # Parse hex value
+                if ($line -match "\s*([0-9A-Fa-f]+)\s+size of stack reserve") {
+                    $hexValue = $Matches[1]
+                    try {
+                        $bytes = [Convert]::ToInt64($hexValue, 16)
+                        $mb = [math]::Round($bytes / 1MB, 2)
+                        if ($mb -eq 128) {
+                            Write-Host "  Verified: 128 MB stack reserve is correctly applied" -ForegroundColor Green
+                        } else {
+                            Write-Warning "  WARNING: Stack reserve is $mb MB, expected 128 MB"
+                        }
+                    } catch {
+                        Write-Host "  (Could not parse hex value: $hexValue)" -ForegroundColor Yellow
+                    }
+                }
+            } else {
+                Write-Warning "  Could not find stack reserve in dumpbin output"
+            }
+        } catch {
+            Write-Host "  (dumpbin check failed: $_)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  (dumpbin not found, skipping verification)" -ForegroundColor Gray
+    }
+} else {
+    Write-Host "  (pw.x.exe not found, skipping verification)" -ForegroundColor Gray
 }
 
 Write-Host ""
