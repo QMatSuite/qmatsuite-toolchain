@@ -1,0 +1,45 @@
+version: "qe-7.5"
+
+groups:
+  pw:
+    root: "pw_scf"
+    patterns:
+      - "*.in"
+  
+  pw_relax:
+    root: "pw_relax"
+    patterns:
+      - "*.in"
+  
+  pw_metal:
+    root: "pw_metal"
+    patterns:
+      - "*.in"
+  
+  ph:
+    root: "ph_base"
+    patterns:
+      - "*.in"
+  
+  cp:
+    root: "cp_h2o"
+    patterns:
+      - "*.in"
+
+defaults:
+  executable_map:
+    pw: "pw.x"
+    pw_relax: "pw.x"
+    pw_metal: "pw.x"
+    ph: "ph.x"
+    cp: "cp.x"
+    pp: "pp.x"
+    hp: "hp.x"
+    epw: "epw.x"
+    tddfpt: "tddfpt.x"
+    kcw: "kcw.x"
+    pioud: "pioud.x"
+    zg: "zg.x"
+    image: "image.x"
+    oscdft: "oscdft.x"
+

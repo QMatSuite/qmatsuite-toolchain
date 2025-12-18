@@ -66,6 +66,23 @@ The build script will:
 
 **Note:** This build uses CMake and follows the same approach as Quantum ESPRESSO. It requires the `develop` branch which includes CMake support.
 
+**⚠️ Important:** CMake support in Wannier90 is a **developing feature** in the `develop` branch and may require inspection. While it resolves the Make build issues on Windows, it is not yet part of an official release.
+
+## GitHub Actions CI
+
+This build system includes a GitHub Actions workflow that automatically tests the build process:
+
+- **Workflow file**: `.github/workflows/wannier90-windows-oneapi.yml`
+- **Triggers**: Runs on pushes/PRs to `toolchains/wannier90/windows/oneapi/**` or manual dispatch
+- **What it does**:
+  1. Installs Intel oneAPI HPC Toolkit (compilers + MKL)
+  2. Sets up CMake and Ninja
+  3. Runs `refresh_wannier90_source.ps1` (clones develop branch)
+  4. Runs `build_wannier90_win_oneapi.ps1 -NoMpi` (builds serial version)
+  5. Verifies executables are built successfully
+
+The CI workflow replicates the local build process and helps ensure the build system works correctly across different environments. Check the workflow runs in the "Actions" tab of the repository.
+
 ## Where Does CMakeLists.txt Come From?
 
 The `CMakeLists.txt` file is part of Wannier90's source code in the `develop` branch on GitHub:
@@ -77,7 +94,11 @@ The refresh script clones this repository and checks out the `develop` branch by
 
 ## Why CMake Instead of Make?
 
-This build system uses CMake instead of the traditional Make-based build for several important reasons related to Windows and Intel oneAPI compatibility:
+This build system uses CMake instead of the traditional Make-based build for several important reasons related to Windows and Intel oneAPI compatibility. However, **CMake support is still a developing feature** in Wannier90's `develop` branch and should be inspected before use in production.
+
+### The Make Build Struggle
+
+Our initial attempt to build Wannier90 on Windows with Intel oneAPI used the traditional Make build system. This approach encountered several critical issues that made it impractical:
 
 ### Issues Encountered with Make Build
 
@@ -119,7 +140,15 @@ This build system uses CMake instead of the traditional Make-based build for sev
 
 ### Migration Path
 
-The Make-based build (`make.inc`) was initially attempted but proved problematic on Windows with Intel oneAPI. The CMake build system, available in Wannier90's `develop` branch, provides a more robust and maintainable solution.
+The Make-based build (`make.inc`) was initially attempted but proved problematic on Windows with Intel oneAPI. After encountering the linker flag conflicts and other issues documented above, we migrated to the CMake build system available in Wannier90's `develop` branch.
+
+**⚠️ Development Status**: The CMake build system is still under active development in Wannier90. While it successfully resolves the Make build issues and works for our use case, users should:
+- Inspect the CMakeLists.txt and build output for any warnings or issues
+- Test the built executables thoroughly before production use
+- Report any issues to the Wannier90 developers
+- Consider that CMake support may change as it evolves toward an official release
+
+The `make.inc` file is retained in this directory for reference, but the CMake build is the recommended and supported approach for Windows oneAPI builds.
 
 ## Build Output
 
@@ -203,5 +232,6 @@ The build script automatically:
 - **No patches required**: Unlike the MinGW build, this oneAPI build does not require any patches to Wannier90 source.
 - **MPI build**: The default configuration builds with MPI support. Use `-NoMpi` flag to build a serial (non-MPI) version.
 - **Executable naming**: Executables are built with the `.x` suffix (e.g., `wannier90.x`, `postw90.x`).
-- **CMake build**: This build uses CMake, which is more modern, better integrated with Intel oneAPI, and follows the same approach as Quantum ESPRESSO. It requires the `develop` branch which includes CMake support.
-- **Legacy Make build**: A Make-based build was attempted but encountered linker flag conflicts and Windows path issues. The CMake build system resolves these problems and is the recommended approach.
+- **CMake build (developing feature)**: This build uses CMake from Wannier90's `develop` branch. While it successfully resolves the Make build issues and is tested via GitHub Actions CI, CMake support is still under active development and should be inspected before production use.
+- **Legacy Make build**: A Make-based build was attempted but encountered critical linker flag conflicts (`link: unknown option -- s`) and Windows path issues that made it impractical. The CMake build system resolves these problems and is the recommended approach, despite being a developing feature.
+- **GitHub Actions CI**: The build process is automatically tested via GitHub Actions (`.github/workflows/wannier90-windows-oneapi.yml`) to ensure it works correctly across different environments.

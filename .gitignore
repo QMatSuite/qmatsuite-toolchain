@@ -58,3 +58,4 @@ dkms.conf
 **/upstream/
 **/build*/
 **/dist/
+**/test-suite/
