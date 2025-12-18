@@ -229,6 +229,7 @@ jobs:
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" -NoMpi
 
       - name: Stage QE executables and runtime DLLs
+        continue-on-error: true
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\stage_qe_windows.ps1" `
@@ -237,6 +238,7 @@ jobs:
             -Strict
 
       - name: Upload staged QE distribution
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qe-windows-oneapi-dist

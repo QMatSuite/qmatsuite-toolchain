@@ -604,8 +604,18 @@ function Run-SmokeTest {
             if (-not $combined) {
                 $combined = ""
             }
+            # Show last 5 lines of output for debugging
+            $outputLines = Get-Content -Path $smokeOutput -ErrorAction SilentlyContinue
+            if ($outputLines) {
+                $lastLines = $outputLines | Select-Object -Last 5
+                Write-Host "  Last 5 lines of ${smokeOutput}:"
+                foreach ($line in $lastLines) {
+                    Write-Host "    $line"
+                }
+            }
         } else {
             $combined = ""
+            Write-Warning "  Output file not found: $smokeOutput"
         }
         
         # Check for "JOB DONE" in the .out file (case-insensitive)
