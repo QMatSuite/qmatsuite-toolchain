@@ -69,6 +69,23 @@ This repository uses a vendor/submodule approach:
    - Download from: https://git-scm.com/download/win
    - Or install via Chocolatey: `choco install git`
 
+## CI/CD: Automated Build and Staging
+
+The GitHub Actions workflow (`.github/workflows/qe-windows-oneapi-mkl.yml`) automates the complete build and staging pipeline:
+
+1. **Installs oneAPI** (with caching for performance)
+2. **Builds QE** using the oneAPI toolchain
+3. **Stages the distribution** using `stage_qe_windows.ps1` with `-Strict` mode
+4. **Uploads the staged distribution** as a GitHub Actions artifact (`qe-windows-oneapi-dist`)
+
+The staged artifact contains:
+- All QE executables (`.exe` files)
+- Required runtime DLLs (Intel Fortran, OpenMP, MKL, MSVC runtime)
+- Test resources (`scf-cg.in`, `Si.pz-vbc.UPF`)
+- Dependency closure log (`deps-closure.txt`)
+
+The artifact is retained for 7 days and can be downloaded from the workflow run page.
+
 ## CI/CD Installation: oneAPI with MKL on Windows
 
 This section documents our experience installing Intel oneAPI HPC Toolkit (with MKL) in GitHub Actions Windows CI environments. The official oneAPI CI samples repository ([oneapi-src/oneapi-ci](https://github.com/oneapi-src/oneapi-ci)) and [documentation](https://oneapi-src.github.io/oneapi-ci/#intelr-oneapi-hpc-toolkit) provide component listings and installation methods, but we encountered several issues that required a specific approach.
@@ -173,7 +190,7 @@ Start-Process -FilePath $bootstrapper -ArgumentList "--silent", "--eula", "accep
 - The `p="..."` parameter disables Visual Studio integration prompts (not needed in CI)
 - The bootstrapper approach is the only reliable method for automated Windows CI installation
 
-**Reference implementation:** See `.github/workflows/qe-windows-oneapi-mkl.yml` in this repository for a complete GitHub Actions workflow that implements this installation method with caching.
+**Reference implementation:** See `.github/workflows/qe-windows-oneapi-mkl.yml` in this repository for a complete GitHub Actions workflow that implements this installation method with caching, builds QE, stages the distribution, and uploads it as an artifact.
 
 ### Caching for CI Performance
 
@@ -268,10 +285,15 @@ Options:
 ```
 Notes:
 - Outputs to `dist/win-oneapi/`
-- Copies QE executables plus required Intel runtimes (OpenMP/MKL/ifx).
+- Implements three-layer staging pipeline:
+  1. **Recursive dependency closure** - Uses `dumpbin /DEPENDENTS` to discover all transitive DLL dependencies (auto-discovers `dumpbin.exe` from VS2022/2019)
+  2. **Must-have DLL patterns** - Ensures critical runtime DLLs (Fortran, OpenMP, MKL, MSVC) are included
+  3. **Clean-room smoke test** - Runs `pw.exe -i scf-cg.in` and verifies "JOB DONE" in output
 - Filter executables: `-Only pw.x,ph.x`
 - Clean staged dir: `-Clean`
-- `stage_qe_windows.ps1` now auto-discovers `dumpbin.exe` (VS2022/2019) and sanitizes PATH entries to avoid "Illegal characters in path"; no manual PATH tweaks needed.
+- Strict mode (fail if smoke test doesn't pass): `-Strict`
+- Generates `deps-closure.txt` with all resolved DLLs
+- Copies test resources from `toolchains/quantum_espresso/tests/resources/` for smoke test
 
 ## Build Process
 
@@ -420,13 +442,24 @@ After a build, stage the executables and required Intel runtimes into a distribu
 ```powershell
 .\scripts\stage_qe_windows.ps1 -Clean
 ```
+- Use strict mode (fail if smoke test doesn't pass):
+```powershell
+.\scripts\stage_qe_windows.ps1 -Strict
+```
+
+The script implements a three-layer staging pipeline:
+
+1. **Recursive dependency closure** - Uses `dumpbin /DEPENDENTS` to discover all transitive DLL dependencies (if `dumpbin.exe` is available)
+2. **Must-have DLL patterns** - Ensures critical runtime DLLs (Fortran, OpenMP, MKL, MSVC) are included even if not detected by dumpbin
+3. **Clean-room smoke test** - Runs a minimal QE calculation (`pw.exe -i scf-cg.in`) to verify the staged distribution works correctly
+
 The script copies QE `.exe` files plus Intel OpenMP, MKL, and Fortran runtime DLLs from your oneAPI install so the binaries run on machines without the full toolchain.
 
-If dumpbin.exe is available (Visual Studio tools), the script will:
-- Parse dependencies of each staged `.exe` via `dumpbin /DEPENDENTS`
-- Copy the required non-system DLLs from oneAPI redistributable/bin/lib paths (recursively, depth-limited)
-- Fall back to pattern-based copies and emit optional-missing notices (`mkl_intel_lp64*.dll`, `libintlc*.dll`)
-- Probe the staged binary (default `pw.x.exe -help`) and surface missing-DLL errors if any
+**Output files:**
+- `deps-closure.txt` - Tab-separated list of all resolved DLLs (`<basename>\t<full_path>`)
+- Test resources (`scf-cg.in`, `Si.pz-vbc.UPF`) copied from `toolchains/quantum_espresso/tests/resources/`
+
+**Note:** In CI environments (GitHub Actions), the staging step runs automatically after the build and uploads the staged distribution as an artifact. See the "CI/CD: Automated Build and Staging" section above for details.
 
 To force dumpbin discovery, ensure `VCToolsInstallDir` is set, e.g.:
 ```powershell
@@ -614,7 +647,7 @@ This is a **stack overflow**, not floating-point overflow. Windows default threa
 The fix is implemented in `scripts/build_qe_win_oneapi.ps1` and includes:
 
 1. **Use Intel Fortran `-heap-arrays` flag** - Forces large automatic arrays and temporaries to be allocated on the heap instead of the stack
-2. **Increase Windows executable stack reserve** - Set linker flag `/STACK:268435456` (256MB) to provide more stack space
+2. **Increase Windows executable stack reserve** - Set linker flag `/STACK:134217728` (128MB) to provide more stack space
 3. **Add `-traceback` in Debug builds** - Improves diagnostic backtraces for debugging
 
 The relevant CMake configure flags are:
@@ -622,8 +655,10 @@ The relevant CMake configure flags are:
 ```cmake
 -DCMAKE_Fortran_FLAGS_RELEASE="-heap-arrays"
 -DCMAKE_Fortran_FLAGS_DEBUG="-heap-arrays -traceback"
--DCMAKE_EXE_LINKER_FLAGS="/STACK:268435456"
+-DCMAKE_EXE_LINKER_FLAGS="/STACK:134217728"
 ```
+
+**Why 128MB:** We confirmed 256MB also works, and it generally has no practical downside because stack reserve is mostly virtual address space. We chose 128MB as a more conservative, still-safe default for distribution; it's large enough for QE while avoiding an unnecessarily large reserve. The `-heap-arrays` flag is the primary fix; the stack reserve is a defensive safeguard.
 
 **Note:** This change is intentionally minimal and does not alter MKL/BLAS/LAPACK discovery behavior. The build script still uses the same MKL detection logic as before.
 
@@ -736,7 +771,11 @@ Builds QE using Intel oneAPI compilers.
 
 ### `scripts/stage_qe_windows.ps1`
 
-Stages QE executables and required runtime DLLs into a distributable directory.
+Stages QE executables and required runtime DLLs into a distributable directory. Implements a three-layer staging pipeline:
+
+1. **Recursive dependency closure** - Uses `dumpbin /DEPENDENTS` to discover all transitive DLL dependencies
+2. **Must-have DLL patterns** - Ensures critical runtime DLLs (Fortran, OpenMP, MKL, MSVC) are included even if not detected by dumpbin
+3. **Clean-room smoke test** - Runs a minimal QE calculation to verify the staged distribution works correctly
 
 **Parameters:**
 - `-BuildDir <path>` - Path to QE build directory (default: "upstream/qe/build-win-oneapi")
@@ -746,6 +785,15 @@ Stages QE executables and required runtime DLLs into a distributable directory.
 - `-VerboseDeps` - Print parsed dependencies for each executable/DLL
 - `-WhatIf` - Dry run: print actions without copying/deleting
 - `-ProbeExe <name>` - Executable name to probe after staging (default: pw.x.exe if present)
+- `-Strict` - Fail if smoke test exit code != 0 OR "JOB DONE" not detected in output
+
+**Output:**
+- Staged executables and DLLs in `$DistDir`
+- `deps-closure.txt` - Tab-separated list of all resolved DLLs (`<basename>\t<full_path>`)
+- Test resources copied from `toolchains/quantum_espresso/tests/resources/` (for smoke test)
+
+**Smoke Test:**
+The script runs `pw.exe -i scf-cg.in` in the staged directory and checks for "JOB DONE" in the output. With `-Strict` mode, the script fails if the test doesn't pass, ensuring the staged distribution is functional.
 
 ## Additional Resources
 

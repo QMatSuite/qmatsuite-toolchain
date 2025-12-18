@@ -228,3 +228,18 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" -NoMpi
 
+      - name: Stage QE executables and runtime DLLs
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\stage_qe_windows.ps1" `
+            -BuildDir "upstream\qe\build-win-oneapi" `
+            -DistDir "dist\win-oneapi" `
+            -Strict
+
+      - name: Upload staged QE distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-windows-oneapi-dist
+          path: toolchains/quantum_espresso/windows/oneapi/dist/win-oneapi/**
+          retention-days: 7
+
