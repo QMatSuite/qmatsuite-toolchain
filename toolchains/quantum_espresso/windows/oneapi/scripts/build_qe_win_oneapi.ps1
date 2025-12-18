@@ -1,14 +1,22 @@
 # Quantum ESPRESSO Windows Build Script for Intel oneAPI
 # This script builds QE using Intel oneAPI compilers (ifx/icx) via CMake
-# Usage: .\scripts\build_qe_win_oneapi.ps1 [-NoMpi] [-QeSourceDir <path>]
+# Usage: .\scripts\build_qe_win_oneapi.ps1 [-NoMpi] [-QeSourceDir <path>] [-FftwVendor <Internal|Intel_FFTW3|Intel_DFTI|AUTO>]
 #
 # Prerequisites:
 #   - QE source must be cloned from git (not a zip archive) with submodules initialized
 #   - Run scripts/refresh_qe_source.ps1 first to set up upstream/qe/
+#
+# FFT Backend Options:
+#   -FftwVendor Intel_FFTW3 (default): Use external Intel MKL FFTW3 wrapper
+#   -FftwVendor Internal: Use QE's internal FFT implementation
+#   -FftwVendor Intel_DFTI: Use Intel MKL DFTI interface
+#   -FftwVendor AUTO: Let CMake auto-detect (not recommended)
 
 param(
     [switch]$NoMpi,                    # If specified, build serial QE without MPI
-    [string]$QeSourceDir = "upstream/qe"  # Path to QE source directory (relative to repo root)
+    [string]$QeSourceDir = "upstream/qe",  # Path to QE source directory (relative to repo root)
+    [ValidateSet('Internal', 'Intel_FFTW3', 'Intel_DFTI', 'AUTO')]
+    [string]$FftwVendor = "Intel_DFTI"  # FFT backend vendor (default: Intel_FFTW3)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -157,6 +165,7 @@ Write-Host ""
 $mpiFlag = if ($NoMpi) { "OFF" } else { "ON" }
 Write-Host "Step 2: Configuration" -ForegroundColor Yellow
 Write-Host "  MPI: $mpiFlag"
+Write-Host "  FFT Vendor: $FftwVendor"
 Write-Host ""
 
 # Step 3: Check for Visual Studio Build Tools (required for linker)
@@ -268,6 +277,83 @@ if (-not $cmakeGenerator) {
 }
 Write-Host ""
 
+# Step 6b: Validate FFT vendor and resolve paths
+Write-Host "Step 6b: Validating FFT vendor configuration..." -ForegroundColor Yellow
+Write-Host "  FFT vendor: $FftwVendor" -ForegroundColor Cyan
+
+$fftVendorIncludeDirs = $null
+$fftVendorLibraries = $null
+$libiomp5mdPath = $null
+
+if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
+    # Validate required paths for both Intel_FFTW3 and Intel_DFTI
+    $mklRtLib = Join-Path $mklRoot "lib\mkl_rt.lib"
+    $fftw3Header = Join-Path $mklRoot "include\fftw\fftw3.h"
+    
+    if (-not (Test-Path $mklRtLib)) {
+        Write-Host ""
+        Write-Host "ERROR: $FftwVendor selected but required library not found!" -ForegroundColor Red
+        Write-Host "  Missing: $mklRtLib" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Either install MKL FFTW headers/libs or rerun with -FftwVendor Internal" -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+    
+    if (-not (Test-Path $fftw3Header)) {
+        Write-Host ""
+        Write-Host "ERROR: $FftwVendor selected but required header not found!" -ForegroundColor Red
+        Write-Host "  Missing: $fftw3Header" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Either install MKL FFTW headers/libs or rerun with -FftwVendor Internal" -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+    
+    # Resolve libiomp5md.lib
+    $latestCompilerPath = Join-Path $oneApiRoot "compiler\latest\lib\libiomp5md.lib"
+    if (Test-Path $latestCompilerPath) {
+        $libiomp5mdPath = $latestCompilerPath
+    } else {
+        # Search for all compiler versions and pick the newest
+        $compilerVersions = Get-ChildItem "$oneApiRoot\compiler" -Directory -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Name -match '^\d+\.\d+$' } |
+            Sort-Object { [Version]$_.Name } -Descending
+        
+        foreach ($version in $compilerVersions) {
+            $candidate = Join-Path $version.FullName "lib\libiomp5md.lib"
+            if (Test-Path $candidate) {
+                $libiomp5mdPath = $candidate
+                break
+            }
+        }
+    }
+    
+    if (-not $libiomp5mdPath) {
+        Write-Host ""
+        Write-Host "ERROR: $FftwVendor selected but libiomp5md.lib not found!" -ForegroundColor Red
+        Write-Host "  Searched in: $oneApiRoot\compiler\*\lib\libiomp5md.lib" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "MKL threading typically requires libiomp5md.lib. Either install it or rerun with -FftwVendor Internal" -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+    
+    # Set paths for CMake (same for both Intel_FFTW3 and Intel_DFTI)
+    $fftVendorIncludeDirs = Join-Path $mklRoot "include\fftw"
+    $fftVendorLibraries = "$mklRtLib;$libiomp5mdPath"
+    
+    Write-Host "  VendorFFTW_INCLUDE_DIRS: $fftVendorIncludeDirs" -ForegroundColor Green
+    Write-Host "  VendorFFTW_LIBRARIES: $fftVendorLibraries" -ForegroundColor Green
+    Write-Host "  mkl_rt.lib: $mklRtLib" -ForegroundColor Green
+    Write-Host "  libiomp5md.lib: $libiomp5mdPath" -ForegroundColor Green
+} elseif ($FftwVendor -eq "Internal") {
+    Write-Host "  Using QE internal FFT implementation" -ForegroundColor Green
+} elseif ($FftwVendor -eq "AUTO") {
+    Write-Host "  Letting CMake auto-detect FFT backend" -ForegroundColor Yellow
+}
+Write-Host ""
+
 # Step 7: Build CMake commands
 # Assemble the CMake configure and build commands as strings for cmd.exe
 Write-Host "Step 7: Building CMake commands..." -ForegroundColor Yellow
@@ -324,8 +410,18 @@ $cmakeConfigure = @(
     "-DQE_MBD_INTERNAL=ON",            # Use internal MBD (submodule exists)
     "-DQE_DEVICEXLIB_INTERNAL=ON",     # Use internal DeviceXlib (submodule exists)
     "-DQE_ENABLE_ENVIRON=NO",          # Disable Environ (avoids git submodule issues)
-    "-DQE_FFTW_VENDOR=Internal"        # Use internal FFTW (MKL FFTW detection may be complex)
-) -join " "
+    "-DQE_FFTW_VENDOR=$FftwVendor"     # FFT vendor (user-selected)
+)
+
+# Add VendorFFTW hints for both Intel_FFTW3 and Intel_DFTI
+if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
+    $cmakeConfigure += "-DVendorFFTW_ID=Intel"
+    $cmakeConfigure += "-DVendorFFTW_INCLUDE_DIRS=`"$fftVendorIncludeDirs`""
+    $cmakeConfigure += "-DVendorFFTW_LIBRARIES=`"$fftVendorLibraries`""
+}
+
+# Convert to single string for cmd.exe
+$cmakeConfigure = $cmakeConfigure -join " "
 
 # Build CMake build command
 # Build only the 'pw' target initially (can be extended later)
@@ -406,11 +502,30 @@ try {
     $configureCmd = "$vsInitPrefix && $oneApiInit && $cmakeConfigure"
     $buildCmd = "$vsInitPrefix && $oneApiInit && $cmakeBuild"
     
+    # Log FFT vendor configuration before running CMake
+    Write-Host "=== FFT Vendor Configuration ===" -ForegroundColor Cyan
+    Write-Host "FFTW vendor: $FftwVendor" -ForegroundColor White
+    if ($fftVendorIncludeDirs) {
+        Write-Host "VendorFFTW_INCLUDE_DIRS: $fftVendorIncludeDirs" -ForegroundColor White
+    }
+    if ($fftVendorLibraries) {
+        Write-Host "VendorFFTW_LIBRARIES: $fftVendorLibraries" -ForegroundColor White
+    }
+    Write-Host ""
+    
     Write-Host "=== CMake Configuration ===" -ForegroundColor Yellow
     & cmd.exe /c $configureCmd
     $configureExit = $LASTEXITCODE
     if ($configureExit -ne 0) {
-        throw "CMake configuration failed with exit code $configureExit"
+        Write-Host ""
+        Write-Host "ERROR: CMake configuration failed with exit code $configureExit" -ForegroundColor Red
+        if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
+            Write-Host ""
+            Write-Host "$FftwVendor selected but VendorFFTW not found." -ForegroundColor Yellow
+            Write-Host "Either install MKL FFTW headers/libs or rerun with -FftwVendor Internal" -ForegroundColor Yellow
+            Write-Host ""
+        }
+        exit $configureExit
     }
     
     Write-Host ""
