@@ -1,8 +1,15 @@
-# Windows Build Guide for Quantum ESPRESSO
+# Quantum ESPRESSO Windows oneAPI Toolchain
 
-This guide explains how to build Quantum ESPRESSO (QE) on Windows using Intel oneAPI compilers.
+This directory contains build scripts and documentation for building Quantum ESPRESSO on Windows using Intel oneAPI compilers (ifx/icx).
 
 **Note on toolchain scope:** This document specifically covers the Intel oneAPI toolchain for Windows. There is a separate MinGW/MSYS2-based Windows toolchain for Quantum ESPRESSO in this repository under `toolchains/quantum_espresso/windows/mingw`. That MinGW path uses gfortran and MS-MPI, is already working, and we plan to compare its performance with the Intel oneAPI + MKL path. MinGW-specific details are documented separately in that toolchain's documentation.
+
+## Quick Links
+
+- **Build script**: `scripts/build_qe_win_oneapi.ps1`
+- **Staging script**: `scripts/stage_qe_windows.ps1`
+- **Refresh script**: `scripts/refresh_qe_source.ps1`
+- **Patch script**: `scripts/apply_qe_patches.ps1`
 
 ## Why Git Clone is Required
 
@@ -25,14 +32,17 @@ This repository uses a vendor/submodule approach:
 .
 ├── scripts/                    # Our build scripts
 │   ├── build_qe_win_oneapi.ps1 # Main build script
-│   └── refresh_qe_source.ps1   # QE source refresh script
+│   ├── refresh_qe_source.ps1   # QE source refresh script
+│   ├── apply_qe_patches.ps1    # Windows patch application
+│   └── stage_qe_windows.ps1     # Runtime DLL staging
 ├── upstream/                   # Vendor directory
 │   └── qe/                    # QE source (cloned from git)
 │       ├── PW/
 │       ├── PHonon/
 │       ├── external/          # Git submodules
 │       └── ...
-└── docs/                      # Documentation (this file)
+├── patches/                    # Windows-specific patches
+└── dist/                       # Staged distributable binaries
 ```
 
 ## Prerequisites
@@ -216,14 +226,14 @@ Order matters: refresh (clone) → apply patches → build → stage.
 
 ### Step 0: Install prerequisites
 - Intel oneAPI HPC Toolkit (2024+). Includes ifx/icx, MKL, setvars.bat.
-- Visual Studio 2022 (or 2019) Build Tools with “Desktop development with C++”. oneAPI supports VS2019/VS2022; older versions do not work.
+- Visual Studio 2022 (or 2019) Build Tools with "Desktop development with C++". oneAPI supports VS2019/VS2022; older versions do not work.
 - Chocolatey (recommended) plus packages:
   ```powershell
   choco install git
   choco install cmake
   choco install ninja
   ```
-  (If you install CMake/Ninja manually, ensure they’re on PATH.)
+  (If you install CMake/Ninja manually, ensure they're on PATH.)
 
 ### Step 1: Refresh (clone QE from git)
 ```powershell
@@ -261,7 +271,7 @@ Notes:
 - Copies QE executables plus required Intel runtimes (OpenMP/MKL/ifx).
 - Filter executables: `-Only pw.x,ph.x`
 - Clean staged dir: `-Clean`
-- `stage_qe_windows.ps1` now auto-discovers `dumpbin.exe` (VS2022/2019) and sanitizes PATH entries to avoid “Illegal characters in path”; no manual PATH tweaks needed.
+- `stage_qe_windows.ps1` now auto-discovers `dumpbin.exe` (VS2022/2019) and sanitizes PATH entries to avoid "Illegal characters in path"; no manual PATH tweaks needed.
 
 ## Build Process
 
@@ -273,18 +283,6 @@ The build script performs these steps:
 4. **Locates CMake and Ninja** - Finds build tools
 5. **Configures CMake** - Sets up build with Intel compilers and MKL
 6. **Builds QE** - Compiles `pw.x`, `ph.x`, `pp.x` executables
-
-## CMake/Windows workarounds we had to apply
-
-These changes are already in the repo; keep them in mind for future updates:
-
-- **Preprocessing without shells:** `qe_prepare_fortran_include` (in `cmake/qeHelpers.cmake`) now copies pure Fortran headers and preprocesses the rest via a CMake `-P` helper using `OUTPUT_FILE` (no `>` redirection). It detects `#` lines and picks compiler-specific flags: Intel `-fpp -E -P`, GNU `-cpp -E -P`, NVHPC `-Mpreprocess -E`. Lists are semicolon-escaped when passed with `-D...:STRING=` to avoid CMake argument splitting.
-- **LAXlib headers:** `LAXlib/CMakeLists.txt` now uses `qe_prepare_fortran_include` for all `.h -> .fh` generation, eliminating the previous allowlist and shell redirection that broke on Windows.
-- **C preprocessor selection:** `QE_CPP` is set explicitly to `icx` in the build script so `qe_preprocess_source` has a working preprocessor on Windows.
-- **Git info without pipes:** `cmake/GitInfo.cmake` generates `git-rev.h` via pure `execute_process` + `file(WRITE)`, no `sed`/pipes. Falls back to `UNKNOWN` if git is absent.
-- **Submodules must be from git:** QE must be cloned (not zipped) so submodule content and git metadata exist; otherwise CMake will fail. The `refresh_qe_source.ps1` script handles cloning and submodules.
-- **Tooling expectations:** Ninja is the generator; VS2022 is required for the MSVC linker; oneAPI `setvars.bat` must be run in the same `cmd.exe` as CMake configure/build (handled by the build script).
-- **Internal libs to reduce friction:** We use internal FFTW (`QE_FFTW_VENDOR=Internal`) and internal wannier90/mbd/devxlib to avoid external `find_package` or submodule cloning during configure.
 
 ## Build Output
 
@@ -406,17 +404,6 @@ Rather than continuing to fight with patch format issues, we switched to a **com
 - Simpler and more reliable than patching
 
 **Lesson learned:** For complete file replacements (especially small files), direct file copying is more reliable than patch files in CI environments where patch application can be sensitive to git configuration, line endings, and environment differences.
-
-- Always clone QE via git with submodules:
-  ```powershell
-  git clone --recursive https://github.com/QEF/q-e.git
-  ```
-- To review what’s patched:
-  ```powershell
-  cd upstream/qe
-  git status
-  git diff --stat
-  ```
 
 ## Windows: staging distributable binaries
 
@@ -576,6 +563,114 @@ Therefore, we decided to standardize on external Intel MKL for BLAS/LAPACK on th
 - Simplified build configuration (no need to compile LAPACK from source)
 - Consistent behavior across local development and CI environments
 
+### Runtime crash: forrtl severe (170) stack overflow (pw.exe)
+
+#### Symptom
+
+Build succeeds, but `pw.exe` crashes immediately on simple input with `forrtl: severe (170): stack overflow`. The crash happens right after PWSCF prints the "Current dimensions…" banner.
+
+Example crash output:
+
+```
+Reading input from .\scf-cg.in
+
+     Current dimensions of program PWSCF are:
+
+     Max number of different atomic species (ntypx) = 10        
+
+     Max number of k-points (npk) =  40000
+
+     Max angular momentum in pseudopotentials (lmaxx) =  4      
+
+forrtl: severe (170): Program Exception - stack overflow
+
+Image              PC                Routine            Line        Source
+
+pw.exe             00007FF7CEF20D07  Unknown               Unknown  Unknown
+
+pw.exe             00007FF7CE60C006  Unknown               Unknown  Unknown
+
+pw.exe             00007FF7CE526C0B  Unknown               Unknown  Unknown
+
+pw.exe             00007FF7CE5250D2  Unknown               Unknown  Unknown
+
+pw.exe             00007FF7CE521190  Unknown               Unknown  Unknown
+
+pw.exe             00007FF7CEF17B2B  Unknown               Unknown  Unknown
+
+pw.exe             00007FF7CEF20C30  Unknown               Unknown  Unknown
+
+KERNEL32.DLL       00007FFA4A77E8D7  Unknown               Unknown  Unknown
+
+ntdll.dll          00007FFA4AA6C53C  Unknown               Unknown  Unknown
+```
+
+#### Root Cause
+
+This is a **stack overflow**, not floating-point overflow. Windows default thread stack is small (typically 1MB), and QE/Fortran can allocate large automatic arrays and temporary arrays on the stack. This triggers the crash early in runtime when these arrays are allocated.
+
+#### Fix
+
+The fix is implemented in `scripts/build_qe_win_oneapi.ps1` and includes:
+
+1. **Use Intel Fortran `-heap-arrays` flag** - Forces large automatic arrays and temporaries to be allocated on the heap instead of the stack
+2. **Increase Windows executable stack reserve** - Set linker flag `/STACK:268435456` (256MB) to provide more stack space
+3. **Add `-traceback` in Debug builds** - Improves diagnostic backtraces for debugging
+
+The relevant CMake configure flags are:
+
+```cmake
+-DCMAKE_Fortran_FLAGS_RELEASE="-heap-arrays"
+-DCMAKE_Fortran_FLAGS_DEBUG="-heap-arrays -traceback"
+-DCMAKE_EXE_LINKER_FLAGS="/STACK:268435456"
+```
+
+**Note:** This change is intentionally minimal and does not alter MKL/BLAS/LAPACK discovery behavior. The build script still uses the same MKL detection logic as before.
+
+#### Verification
+
+After applying these flags, `pw.exe` should pass the minimal `scf-cg.in` test without the immediate stack overflow crash.
+
+### Runtime error: Missing MKL DLLs (mkl_avx2.2.dll, mkl_def.2.dll)
+
+#### Symptom
+
+After staging executables, running `pw.exe` fails with:
+
+```
+INTEL oneMKL ERROR: The specified module could not be found. mkl_avx2.2.dll.
+Intel oneMKL FATAL ERROR: Cannot load mkl_avx2.2.dll or mkl_def.2.dll
+```
+
+#### Root Cause
+
+The staging script (`scripts/stage_qe_windows.ps1`) was not copying all required MKL interface DLLs. While it copied core MKL DLLs (`mkl_core*.dll`, `mkl_intel_lp64*.dll`, etc.), it was missing the AVX2-optimized interface DLLs (`mkl_avx2*.dll`) and the default interface DLL (`mkl_def*.dll`) that MKL dynamically loads at runtime.
+
+#### Fix
+
+The fix is implemented in `scripts/stage_qe_windows.ps1` by adding the missing DLL patterns to the MKL pattern list:
+
+**Location 1** (line 406 - main MKL pattern copy):
+```powershell
+Copy-DllPatterns -Patterns @("mkl_core*.dll","mkl_intel_lp64*.dll","mkl_intel_thread*.dll","mkl_rt*.dll","mkl_avx2*.dll","mkl_def*.dll") ...
+```
+
+**Location 2** (line 415 - supplemental pattern copy):
+```powershell
+Copy-DllPatterns -Patterns @("mkl_intel_lp64*.dll","mkl_avx2*.dll","mkl_def*.dll","libintlc*.dll") ...
+```
+
+These patterns will match:
+- `mkl_avx2.2.dll` (the specific DLL from the error)
+- `mkl_def.2.dll` (the specific DLL from the error)
+- Any future versions (e.g., `mkl_avx2.3.dll`, `mkl_def.3.dll`)
+
+The `Get-SearchRoots` function already searches in MKL directories (`mkl\latest\bin`, `mkl\latest\redist\intel64`, `mkl\latest\redist\intel64\mkl`), so these DLLs will be found and copied to the dist directory.
+
+#### Verification
+
+After re-running the staging script, the dist directory should contain `mkl_avx2.2.dll` and `mkl_def.2.dll`, and `pw.exe` should run without the MKL DLL loading error.
+
 ## Advanced Usage
 
 ### Building Specific Targets
@@ -615,6 +710,7 @@ Refreshes QE source by cleaning old sources and cloning fresh from git.
 **Parameters:**
 - `-DryRun` - Show what would be deleted without actually doing it
 - `-QeVersion <tag>` - Clone specific version (e.g., "qe-7.5"). Default: newest release
+- `-NoPatch` - Skip automatic patch application
 
 **What it preserves:**
 - `scripts/` directory
@@ -638,6 +734,19 @@ Builds QE using Intel oneAPI compilers.
 **Environment Variables:**
 - `ONEAPI_ROOT` - Override oneAPI installation path (default: `C:\Program Files (x86)\Intel\oneAPI`)
 
+### `scripts/stage_qe_windows.ps1`
+
+Stages QE executables and required runtime DLLs into a distributable directory.
+
+**Parameters:**
+- `-BuildDir <path>` - Path to QE build directory (default: "upstream/qe/build-win-oneapi")
+- `-DistDir <path>` - Target dist directory (default: "dist/win-oneapi")
+- `-Only <list>` - List of executable basenames to stage (e.g., "pw.x,ph.x")
+- `-Clean` - Delete dist directory before staging
+- `-VerboseDeps` - Print parsed dependencies for each executable/DLL
+- `-WhatIf` - Dry run: print actions without copying/deleting
+- `-ProbeExe <name>` - Executable name to probe after staging (default: pw.x.exe if present)
+
 ## Additional Resources
 
 - **QE Official Documentation:** https://www.quantum-espresso.org/
@@ -649,5 +758,3 @@ Builds QE using Intel oneAPI compilers.
 - **oneAPI CI Component Documentation:** https://oneapi-src.github.io/oneapi-ci/#intelr-oneapi-hpc-toolkit
   - Complete list of component IDs for Windows/Linux/macOS
   - Version information and component dependencies
-
-

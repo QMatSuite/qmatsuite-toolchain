@@ -403,7 +403,7 @@ if ($dumpbinPath) {
     # OpenMP
     Copy-DllPatterns -Patterns @("libiomp5md.dll") -SearchRoots $searchRoots -DistDir $DistRoot -WhatIf:$WhatIf
     # MKL
-    Copy-DllPatterns -Patterns @("mkl_core*.dll","mkl_intel_lp64*.dll","mkl_intel_thread*.dll","mkl_rt*.dll") -SearchRoots $searchRoots -DistDir $DistRoot -Optional -WhatIf:$WhatIf
+    Copy-DllPatterns -Patterns @("mkl_core*.dll","mkl_intel_lp64*.dll","mkl_intel_thread*.dll","mkl_rt*.dll","mkl_avx2*.dll","mkl_def*.dll") -SearchRoots $searchRoots -DistDir $DistRoot -Optional -WhatIf:$WhatIf
     # Intel Fortran runtime
     Copy-DllPatterns -Patterns @("libifcoremd*.dll","libifportmd*.dll","libmmd*.dll","svml_dispmd*.dll","libintlc*.dll","libimalloc*.dll") -SearchRoots $searchRoots -DistDir $DistRoot -Optional -WhatIf:$WhatIf
 }
@@ -412,7 +412,7 @@ if ($dumpbinPath) {
 if ($dumpbinPath) {
     $searchRoots = Get-SearchRoots -OneApiRoot $oneApiRoot
     Write-Host "Optional pattern copy (supplemental)..."
-    Copy-DllPatterns -Patterns @("mkl_intel_lp64*.dll","libintlc*.dll") -SearchRoots $searchRoots -DistDir $DistRoot -Optional -WhatIf:$WhatIf
+    Copy-DllPatterns -Patterns @("mkl_intel_lp64*.dll","mkl_avx2*.dll","mkl_def*.dll","libintlc*.dll") -SearchRoots $searchRoots -DistDir $DistRoot -Optional -WhatIf:$WhatIf
 }
 
 # Probe
