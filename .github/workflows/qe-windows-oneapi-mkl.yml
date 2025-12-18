@@ -10,6 +10,12 @@ on:
       - 'toolchains/quantum_espresso/windows/oneapi/**'
       - '.github/workflows/qe-windows-oneapi-mkl.yml'
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build directory before building (forces fresh build)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: windows-oneapi-qe-${{ github.ref }}
@@ -39,7 +45,7 @@ jobs:
         with:
           path: |
             toolchains/quantum_espresso/windows/oneapi/upstream/qe
-          key: qe-oneapi-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/**') }}
+          key: qe-oneapi-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}
           restore-keys: |
             qe-oneapi-${{ runner.os }}-
 
@@ -223,10 +229,50 @@ jobs:
             -QeDir "$env:QE_SRC" `
             -PatchDir "$env:QE_ROOT\patches"
 
+      - name: Clean build directory (if requested)
+        if: inputs.clean_build == true
+        run: |
+          $buildDir = Join-Path $env:QE_SRC "build-win-oneapi"
+          if (Test-Path $buildDir) {
+            Write-Host "Cleaning build directory: $buildDir"
+            Remove-Item -Recurse -Force $buildDir
+            Write-Host "Build directory cleaned"
+          } else {
+            Write-Host "Build directory does not exist, nothing to clean"
+          }
+
       - name: Build QE (oneAPI, no MPI)
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" -NoMpi
+
+      - name: Post-build diagnostics
+        run: |
+          $pwExe = Join-Path $env:QE_SRC "build-win-oneapi\bin\pw.exe"
+          $cmakeCache = Join-Path $env:QE_SRC "build-win-oneapi\CMakeCache.txt"
+          
+          Write-Host "=== Post-build diagnostics ===" -ForegroundColor Cyan
+          
+          # Check stack reserve size
+          if (Test-Path $pwExe) {
+            Write-Host "Stack reserve size of pw.exe:"
+            $dumpbinPath = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+            if ($dumpbinPath) {
+              & $dumpbinPath.Source /headers $pwExe | Select-String -Pattern "size of stack reserve" -CaseSensitive:$false
+            } else {
+              Write-Warning "dumpbin.exe not found, skipping stack reserve check"
+            }
+          } else {
+            Write-Warning "pw.exe not found at: $pwExe"
+          }
+          
+          # Check CMakeCache flags
+          if (Test-Path $cmakeCache) {
+            Write-Host "Relevant CMakeCache flags:"
+            Select-String -Path $cmakeCache -Pattern "CMAKE_Fortran_FLAGS_RELEASE:STRING=|CMAKE_EXE_LINKER_FLAGS:STRING=" | ForEach-Object { $_.Line }
+          } else {
+            Write-Warning "CMakeCache.txt not found at: $cmakeCache"
+          }
 
       - name: Stage QE executables and runtime DLLs
         continue-on-error: true

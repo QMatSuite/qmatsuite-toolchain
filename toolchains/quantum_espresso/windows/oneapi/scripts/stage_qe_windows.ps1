@@ -450,6 +450,7 @@ function Copy-MustHaveDllPatterns {
             Patterns = @("libiomp5md*.dll")
             Required = $true
             Found = 0
+            PreferRelease = $true  # Prefer release DLL, avoid _db.dll
         }
         "MKL Core" = @{
             Patterns = @("mkl_core*.dll", "mkl_def*.dll", "mkl_rt*.dll", "mkl_intel_thread*.dll")
@@ -478,9 +479,38 @@ function Copy-MustHaveDllPatterns {
         
         foreach ($pattern in $cat.Patterns) {
             $found = $null
+            $allMatches = @()
+            
+            # Collect all matches first (for OpenMP release preference logic)
             foreach ($root in $extendedRoots) {
-                $found = Get-ChildItem -Path $root -Filter $pattern -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($found) { break }
+                $matches = Get-ChildItem -Path $root -Filter $pattern -File -Recurse -ErrorAction SilentlyContinue
+                if ($matches) {
+                    $allMatches += $matches
+                }
+            }
+            
+            # For OpenMP with PreferRelease, prioritize exact libiomp5md.dll, then exclude _db.dll
+            if ($cat.PreferRelease -and $pattern -eq "libiomp5md*.dll") {
+                # First try exact match: libiomp5md.dll
+                $exactMatch = $allMatches | Where-Object { $_.Name -eq "libiomp5md.dll" } | Select-Object -First 1
+                if ($exactMatch) {
+                    $found = $exactMatch
+                    Write-Host "    [OpenMP] Selected exact match: libiomp5md.dll (release)"
+                } else {
+                    # Fallback: any libiomp5md*.dll but prefer non-_db
+                    $nonDbMatches = $allMatches | Where-Object { $_.Name -notmatch "_db\.dll$" } | Select-Object -First 1
+                    if ($nonDbMatches) {
+                        $found = $nonDbMatches
+                        Write-Host "    [OpenMP] Selected: $($found.Name) (release, non-_db)"
+                    } elseif ($allMatches.Count -gt 0) {
+                        # Last resort: use _db.dll if nothing else found
+                        $found = $allMatches | Select-Object -First 1
+                        Write-Warning "    [OpenMP] Only debug DLL found: $($found.Name) (fallback, may cause issues)"
+                    }
+                }
+            } else {
+                # Default behavior: first match
+                $found = $allMatches | Select-Object -First 1
             }
             
             if ($found) {
