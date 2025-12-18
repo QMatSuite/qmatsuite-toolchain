@@ -23,8 +23,8 @@ Dry run: print actions without copying/deleting.
 .PARAMETER ProbeExe
 Executable name to probe after staging (default: pw.x.exe if present, else first exe).
 
-.PARAMETER Strict
-If set, staging fails if smoke test exit code != 0 OR "JOB DONE" not detected.
+.PARAMETER NoStrict
+If set, disables strict mode (not recommended). By default, staging fails if smoke test exit code != 0 OR "JOB DONE" not detected.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -34,7 +34,7 @@ param(
     [switch]$Clean,
     [switch]$VerboseDeps,
     [string]$ProbeExe,
-    [switch]$Strict
+    [switch]$NoStrict  # If set, disables strict mode (not recommended)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,6 +193,23 @@ function Is-SystemDll {
     return $false
 }
 
+function Is-DenylistedDll {
+    param(
+        [string]$Name
+    )
+    # Denylist: these DLLs must NEVER be staged
+    $denylistPatterns = @(
+        "*_db.dll",      # Debug runtimes (e.g., libiomp5md_db.dll)
+        "libimalloc.dll" # Intel scalable allocator (not required)
+    )
+    foreach ($pattern in $denylistPatterns) {
+        if ($Name -like $pattern) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Resolve-DllPath {
     param(
         [string]$Name,
@@ -224,13 +241,43 @@ function Stage-Executables {
     if (-not $exeFiles) {
         throw "No executables found to stage. Check build output or -Only filters."
     }
-    foreach ($exe in $exeFiles) {
+    
+    # Separate .x.exe files from regular .exe files
+    $xExeFiles = $exeFiles | Where-Object { $_.Name -like "*.x.exe" }
+    $regularExeFiles = $exeFiles | Where-Object { $_.Name -notlike "*.x.exe" }
+    
+    # Process .x.exe files: remove existing .exe, copy .x.exe, then rename to .exe
+    foreach ($xExe in $xExeFiles) {
+        $targetName = $xExe.Name -replace '\.x\.exe$', '.exe'
+        $targetPath = Join-Path $DistDir $targetName
+        $xExeDest = Join-Path $DistDir $xExe.Name
+        
+        if ($PSCmdlet.ShouldProcess($targetPath, "Stage $($xExe.Name) -> $targetName") -and -not $WhatIfPreference) {
+            # Remove existing .exe if it exists
+            if (Test-Path $targetPath) {
+                Remove-Item -Path $targetPath -Force -ErrorAction SilentlyContinue
+            }
+            # Remove any existing .x.exe in dist (shouldn't exist, but clean up just in case)
+            if (Test-Path $xExeDest) {
+                Remove-Item -Path $xExeDest -Force -ErrorAction SilentlyContinue
+            }
+            # Copy .x.exe to dist
+            Copy-Item -Force $xExe.FullName $xExeDest
+            # Rename to .exe (removes .x.exe from dist)
+            Rename-Item -Path $xExeDest -NewName $targetName -Force
+        }
+        Write-Host "  exe: $($xExe.Name) -> $targetName"
+    }
+    
+    # Process regular .exe files (not .x.exe): just copy them
+    foreach ($exe in $regularExeFiles) {
         $dest = Join-Path $DistDir $exe.Name
         if ($PSCmdlet.ShouldProcess($dest, "Copy exe $($exe.FullName)") -and -not $WhatIfPreference) {
             Copy-Item -Force $exe.FullName $dest
         }
         Write-Host "  exe: $($exe.Name)"
     }
+    
     return $exeFiles
 }
 
@@ -332,6 +379,12 @@ function Copy-DllClosure {
         foreach ($dllName in $deps) {
             $dllBasename = $dllName.ToLowerInvariant()
             if ($visited.ContainsKey($dllBasename)) { continue }
+
+            # Skip denylisted DLLs
+            if (Is-DenylistedDll -Name $dllName) {
+                Write-Host "  DENYLIST: Skipping $dllName (prohibited from distribution)"
+                continue
+            }
 
             $resolvedPath = Resolve-DllPath -Name $dllName -SearchRoots $SearchRoots -PathDirs $pathDirs
             if (-not $resolvedPath) {
@@ -435,40 +488,47 @@ function Copy-MustHaveDllPatterns {
     }
     $extendedRoots = $extendedRoots | Select-Object -Unique | Where-Object { $_ -and (Test-Path $_) }
 
+    # Define explicit allowlist: only these DLLs should be staged
+    # This policy is based on multiple validated builds (local + CI artifacts)
     $categories = @{
         "Intel Fortran Runtime" = @{
             Patterns = @("libifcoremd*.dll", "libifportmd*.dll", "libmmd*.dll")
             Required = $true
             Found = 0
+            Description = "Required for any ifx-compiled Fortran code"
         }
-        "Intel Fortran Optional" = @{
-            Patterns = @("svml_dispmd*.dll", "libirc*.dll")
-            Required = $false
+        "Intel SVML" = @{
+            Patterns = @("svml_dispmd*.dll")
+            Required = $true
             Found = 0
+            Description = "Vector math functions used by ifx-compiled code"
         }
         "Intel OpenMP Runtime" = @{
             Patterns = @("libiomp5md*.dll")
             Required = $true
             Found = 0
             PreferRelease = $true  # Prefer release DLL, avoid _db.dll
+            Description = "Required by QE and MKL threading"
         }
         "MKL Core" = @{
             Patterns = @("mkl_core*.dll", "mkl_def*.dll", "mkl_rt*.dll", "mkl_intel_thread*.dll")
             Required = $true
             Found = 0
+            Description = "BLAS / LAPACK / FFT backend"
         }
         "MKL CPU Features" = @{
             Patterns = @("mkl_avx*.dll", "mkl_vml*.dll", "mkl_mc*.dll")
             Required = $false
             Found = 0
-            Comment = "MKL uses CPU dispatch; bundling these improves portability and performance across CPUs"
-        }
-        "MSVC Runtime" = @{
-            Patterns = @("vcruntime*.dll", "msvcp*.dll", "concrt*.dll")
-            Required = $false
-            Found = 0
+            Comment = "Optional: Enable runtime CPU dispatch (AVX2, etc.) for better performance. QE will run without them."
         }
     }
+    
+    # Define explicit denylist: these must NEVER be staged
+    $denylistPatterns = @(
+        "*_db.dll",      # Debug runtimes (e.g., libiomp5md_db.dll)
+        "libimalloc.dll" # Intel scalable allocator (not required)
+    )
 
     foreach ($catName in $categories.Keys) {
         $cat = $categories[$catName]
@@ -489,28 +549,36 @@ function Copy-MustHaveDllPatterns {
                 }
             }
             
-            # For OpenMP with PreferRelease, prioritize exact libiomp5md.dll, then exclude _db.dll
+            # Filter all matches against denylist first
+            $filteredMatches = $allMatches | Where-Object { 
+                $name = $_.Name
+                $denied = $false
+                foreach ($denyPattern in $denylistPatterns) {
+                    if ($name -like $denyPattern) {
+                        $denied = $true
+                        break
+                    }
+                }
+                -not $denied
+            }
+            
+            # For OpenMP with PreferRelease, prioritize exact libiomp5md.dll
             if ($cat.PreferRelease -and $pattern -eq "libiomp5md*.dll") {
-                # First try exact match: libiomp5md.dll
-                $exactMatch = $allMatches | Where-Object { $_.Name -eq "libiomp5md.dll" } | Select-Object -First 1
+                # First try exact match: libiomp5md.dll (already filtered by denylist)
+                $exactMatch = $filteredMatches | Where-Object { $_.Name -eq "libiomp5md.dll" } | Select-Object -First 1
                 if ($exactMatch) {
                     $found = $exactMatch
                     Write-Host "    [OpenMP] Selected exact match: libiomp5md.dll (release)"
                 } else {
-                    # Fallback: any libiomp5md*.dll but prefer non-_db
-                    $nonDbMatches = $allMatches | Where-Object { $_.Name -notmatch "_db\.dll$" } | Select-Object -First 1
-                    if ($nonDbMatches) {
-                        $found = $nonDbMatches
-                        Write-Host "    [OpenMP] Selected: $($found.Name) (release, non-_db)"
-                    } elseif ($allMatches.Count -gt 0) {
-                        # Last resort: use _db.dll if nothing else found
-                        $found = $allMatches | Select-Object -First 1
-                        Write-Warning "    [OpenMP] Only debug DLL found: $($found.Name) (fallback, may cause issues)"
+                    # Fallback: any non-_db libiomp5md*.dll (denylist already filtered _db.dll)
+                    $found = $filteredMatches | Select-Object -First 1
+                    if ($found) {
+                        Write-Host "    [OpenMP] Selected: $($found.Name) (release)"
                     }
                 }
             } else {
-                # Default behavior: first match
-                $found = $allMatches | Select-Object -First 1
+                # Default behavior: first match from filtered list
+                $found = $filteredMatches | Select-Object -First 1
             }
             
             if ($found) {
@@ -544,13 +612,34 @@ function Copy-MustHaveDllPatterns {
         $status = if ($cat.Required) { "REQUIRED" } else { "optional" }
         Write-Host "  $catName ($status): $($cat.Found) DLL(s) found"
     }
+    
+    # Post-staging validation: enforce denylist
+    Write-Host ""
+    Write-Host "Validating staged DLLs against denylist..." -ForegroundColor Cyan
+    $violations = @()
+    Get-ChildItem -Path $DistDir -Filter "*.dll" -File | ForEach-Object {
+        if (Is-DenylistedDll -Name $_.Name) {
+            $violations += $_.Name
+        }
+    }
+    
+    if ($violations.Count -gt 0) {
+        Write-Error "DENYLIST VIOLATION: The following DLLs must not be staged:"
+        foreach ($violation in $violations) {
+            Write-Error "  - $violation"
+        }
+        Write-Error "Staging failed. These DLLs should not be included in the distribution."
+        throw "Denylist validation failed. Found $($violations.Count) prohibited DLL(s)."
+    } else {
+        Write-Host "  Validation passed: No denylisted DLLs found" -ForegroundColor Green
+    }
 }
 
 function Run-SmokeTest {
     param(
         [string]$DistDir,
         [string]$ResourcesDir,
-        [switch]$Strict
+        [switch]$Strict  # Strict mode: fail if exit code != 0 OR "JOB DONE" not detected
     )
     
     if (-not $DistDir) {
@@ -665,16 +754,17 @@ function Run-SmokeTest {
             Write-Warning "DLL missing or incompatible image (exit code indicates loader failure)"
         }
         
-        # Acceptance criteria
+        # Acceptance criteria (strict mode is default)
         $passed = $false
         if ($Strict) {
             if ($exitCode -eq 0 -and $jobDone) {
                 $passed = $true
             } else {
-                Write-Error "Strict mode: Smoke test FAILED (ExitCode=$exitCode, JobDone=$jobDone)"
-                throw "Smoke test failed in strict mode"
+                Write-Error "Smoke test FAILED (ExitCode=$exitCode, JobDone=$jobDone)"
+                throw "Smoke test failed: exit code must be 0 and 'JOB DONE' must be detected in output"
             }
         } else {
+            # Non-strict mode (not recommended, only for debugging)
             if ($exitCode -eq 0) {
                 $passed = $true
                 if (-not $jobDone) {
@@ -957,7 +1047,9 @@ Write-Host "=== Layer 3: Clean-room smoke test ===" -ForegroundColor Cyan
 # Calculate resources directory from script directory (go up 3 levels: scripts -> oneapi -> windows -> quantum_espresso)
 $quantumEspressoRoot = Resolve-Path (Join-Path $ScriptDir "..\..\..") -ErrorAction Stop
 $resourcesDir = Join-Path $quantumEspressoRoot "tests\resources"
-Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$Strict
+# Run smoke test in strict mode by default (require exit code 0 AND "JOB DONE")
+$strictMode = -not $NoStrict
+Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$strictMode
 
 Write-Host ""
 Write-Host "Staging complete. Files in: $DistRoot" -ForegroundColor Green

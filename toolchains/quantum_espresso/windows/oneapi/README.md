@@ -701,6 +701,79 @@ If CI uses cached build directories, changes to build flags may not take effect 
 
 The CI workflow now includes script hashes in the cache key and provides a `clean_build` option to force a fresh build when needed.
 
+## Windows oneAPI Runtime DLL Policy
+
+QE Windows distributions intentionally ship a **curated runtime set**, not the full oneAPI installation. This policy is based on multiple independently validated builds (local builds and CI artifacts) that confirmed QE runs correctly with this minimal set.
+
+**Goals:**
+- **Correctness** - All required runtime dependencies are included
+- **Portability** - Distribution works across Windows systems
+- **Performance** - Optional CPU-dispatch libraries retained for optimal performance
+- **Minimal size** - Unnecessary components excluded
+- **No debug runtimes** - Only release DLLs shipped
+
+### Required DLL Set
+
+The minimal required runtime consists of:
+
+#### Intel Fortran Runtime
+- `libifcoremd.dll` - Intel Fortran core runtime
+- `libifportmd.dll` - Intel Fortran portability / I/O
+- `libmmd.dll` - Intel math runtime
+
+**Role:** Required for any `ifx`-compiled Fortran code.
+
+#### Intel OpenMP
+- `libiomp5md.dll` - Intel OpenMP runtime (release only)
+
+**Role:** Required by QE and MKL threading.
+
+#### Intel SVML
+- `svml_dispmd.dll` - Intel SVML vector math
+
+**Role:** Vector math functions used by `ifx`-compiled code.
+
+#### MKL Core
+- `mkl_core*.dll` - MKL core library
+- `mkl_def*.dll` - MKL default interface
+- `mkl_rt*.dll` - MKL runtime
+- `mkl_intel_thread*.dll` - MKL Intel threading
+
+**Role:** BLAS / LAPACK / FFT backend.
+
+### Optional MKL CPU-Dispatch Libraries
+
+The following are **optional** but recommended for performance:
+
+- `mkl_avx*.dll` - AVX/AVX2 optimizations
+- `mkl_mc*.dll` - Multi-core optimizations
+- `mkl_vml*.dll` - Vector math library optimizations
+
+**Role:** Enable runtime CPU dispatch (AVX2, etc.) for better performance on modern CPUs. QE will still run correctly without them, but performance may be reduced.
+
+### Not Shipped (Intentionally Excluded)
+
+The following components are **explicitly excluded** from distributions:
+
+#### Debug Runtimes
+- `*_db.dll` (e.g., `libiomp5md_db.dll`, `libifcoremd_db.dll`)
+
+**Reason:** Debug runtimes are slower, larger, and behavior differs from release. Multiple validated builds confirm QE runs correctly without them.
+
+#### Intel Scalable Allocator
+- `libimalloc.dll`
+
+**Reason:** Not required unless explicitly enabling Intel allocator. QE and MKL default builds do not use it.
+
+### Rationale
+
+Multiple independently validated DLL sets (local builds and CI artifacts) were compared. The final policy reflects the intersection of required runtime dependencies, with optional performance extensions retained and unnecessary/debug components removed. This ensures correctness, portability, and optimal performance while maintaining a minimal distribution size.
+
+The staging script (`stage_qe_windows.ps1`) enforces this policy automatically:
+- Only allowlisted DLLs are staged
+- Denylisted DLLs are explicitly excluded and cause staging to fail if found
+- Post-staging validation ensures no prohibited DLLs are included
+
 ### Runtime error: Missing MKL DLLs (mkl_avx2.2.dll, mkl_def.2.dll)
 
 #### Symptom

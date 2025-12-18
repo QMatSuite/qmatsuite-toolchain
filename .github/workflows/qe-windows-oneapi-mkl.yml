@@ -253,8 +253,7 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\stage_qe_windows.ps1" `
             -BuildDir "upstream\qe\build-win-oneapi" `
-            -DistDir "dist\win-oneapi" `
-            -Strict
+            -DistDir "dist\win-oneapi"
 
       - name: Upload staged QE distribution
         if: always()
