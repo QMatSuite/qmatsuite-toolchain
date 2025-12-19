@@ -706,19 +706,22 @@ The build script (`scripts/build_qe_win_oneapi.ps1`) sets:
 
 **How to actually set stack reserve (optional but recommended):**
 
-Setting `CMAKE_EXE_LINKER_FLAGS="/STACK:..."` alone may not reliably propagate through the `ifx` driver in some setups, and/or may be defeated by stale `pw.exe` produced by rename logic.
+For `ifx` (IntelLLVM), use `-Qoption,link,/STACK:<bytes>` to pass stack size to the MSVC linker.
+
+**Important:** Do not use `/STACK:<bytes>` directly in `CMAKE_*_LINKER_FLAGS` when the driver is `ifx`, because it triggers warning #10006 (`ifx: command line warning #10006: ignoring unknown option '/STACK:134217728'`).
 
 **Works (recommended):**
 
 Use Intel driver pass-through to ensure the flag reaches the linker:
 
 ```cmake
--DCMAKE_EXE_LINKER_FLAGS="/STACK:134217728 -Qoption,link,/STACK:134217728"
+-DCMAKE_EXE_LINKER_FLAGS="-Qoption,link,/STACK:134217728"
+-DCMAKE_SHARED_LINKER_FLAGS="-Qoption,link,/STACK:134217728"
 ```
 
-The `-Qoption,link,/STACK:134217728` form passes the flag directly through the Intel Fortran driver to the MSVC linker, ensuring it's applied even when the direct `/STACK:...` form might be ignored.
+The `-Qoption,link,/STACK:134217728` form passes the flag directly through the Intel Fortran driver to the MSVC linker, avoiding the compiler warning while still setting the stack reserve correctly.
 
-**Implementation:** The build script now sets both flags (belt-and-suspenders approach) and ensures `pw.exe` is always overwritten from `pw.x.exe` to prevent stale binaries.
+**Implementation:** The build script uses only the `-Qoption,link,/STACK:...` form and ensures `pw.exe` is always overwritten from `pw.x.exe` to prevent stale binaries.
 
 **Why 128MB:** We confirmed 256MB also works, and it generally has no practical downside because stack reserve is mostly virtual address space. We chose 128MB as a more conservative, still-safe default for distribution; it's large enough for QE while avoiding an unnecessarily large reserve. **Note:** The `-heap-arrays` flag is the primary fix; the stack reserve is a defensive safeguard.
 
@@ -746,7 +749,7 @@ Select-String -Path build-win-oneapi\CMakeCache.txt -Pattern "CMAKE_Fortran_FLAG
 **Expected:**
 ```
 CMAKE_Fortran_FLAGS_RELEASE:STRING=-heap-arrays
-CMAKE_EXE_LINKER_FLAGS:STRING=/STACK:134217728 -Qoption,link,/STACK:134217728
+CMAKE_EXE_LINKER_FLAGS:STRING=-Qoption,link,/STACK:134217728
 ```
 
 **Note:** The staging script (`stage_qe_windows.ps1`) automatically prints these diagnostics in the "Post-build diagnostics (from staging)" section, so you can verify both the stack reserve and CMakeCache flags without manual commands.
