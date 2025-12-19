@@ -33,7 +33,9 @@ if ([System.IO.Path]::IsPathRooted($QeSourceDir)) {
 }
 
 # Build directory is relative to QE source (not repo root)
-$BuildDir = Join-Path $QESource "build-win-oneapi"
+# Use separate build directory for MPI builds to avoid cache conflicts
+$buildDirSuffix = if ($NoMpi) { "build-win-oneapi" } else { "build-win-oneapi-msmpi" }
+$BuildDir = Join-Path $QESource $buildDirSuffix
 
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "Quantum ESPRESSO Windows oneAPI Build" -ForegroundColor Cyan
@@ -167,6 +169,142 @@ Write-Host "Step 2: Configuration" -ForegroundColor Yellow
 Write-Host "  MPI: $mpiFlag"
 Write-Host "  FFT Vendor: $FftwVendor"
 Write-Host ""
+
+# Step 2b: Validate MS-MPI installation when MPI is enabled
+$msMpiPaths = @{}
+if ($mpiFlag -eq "ON") {
+    Write-Host "Step 2b: Validating MS-MPI installation..." -ForegroundColor Yellow
+    
+    # Define MS-MPI SDK paths (no guessing beyond defaults)
+    # Assume 64-bit build (VS Hostx64/x64 + ifx x64), so always choose Include\x64
+    $msmpiSdk = "C:\Program Files (x86)\Microsoft SDKs\MPI"
+    $msmpiIncBase = Join-Path $msmpiSdk "Include"
+    $msmpiIncArch = Join-Path $msmpiSdk "Include\x64"
+    $msmpiLibDir = Join-Path $msmpiSdk "Lib\x64"
+    
+    # Store paths for later use
+    $msMpiPaths['MPIEXEC'] = "C:\Program Files\Microsoft MPI\Bin\mpiexec.exe"
+    $msMpiPaths['SDK_ROOT'] = $msmpiSdk
+    $msMpiPaths['SDK_INCLUDE_BASE'] = $msmpiIncBase
+    $msMpiPaths['SDK_INCLUDE_ARCH'] = $msmpiIncArch
+    $msMpiPaths['SDK_LIB_DIR'] = $msmpiLibDir
+    $msMpiPaths['MPIF_H'] = Join-Path $msmpiIncBase "mpif.h"
+    $msMpiPaths['MPIFPTR_H'] = Join-Path $msmpiIncArch "mpifptr.h"
+    
+    # Define all MS-MPI libraries
+    $msmpiLib = Join-Path $msmpiLibDir "msmpi.lib"
+    $msmpifecLib = Join-Path $msmpiLibDir "msmpifec.lib"
+    $msmpifmcLib = Join-Path $msmpiLibDir "msmpifmc.lib"
+    
+    # Store library paths for later use
+    $msMpiPaths['SDK_LIB'] = $msmpiLib
+    $msMpiPaths['SDK_LIB_FEC'] = $msmpifecLib
+    $msMpiPaths['SDK_LIB_FMC'] = $msmpifmcLib
+    
+    # Validate required files exist
+    $missingPaths = @()
+    
+    # Check mpif.h in base Include directory
+    if (-not (Test-Path $msMpiPaths['MPIF_H'])) {
+        Write-Host "  MISSING: mpif.h = $($msMpiPaths['MPIF_H'])" -ForegroundColor Red
+        $missingPaths += 'MPIF_H'
+    } else {
+        Write-Host "  Found: mpif.h = $($msMpiPaths['MPIF_H'])" -ForegroundColor Green
+    }
+    
+    # Check mpifptr.h in architecture-specific Include\x64 directory
+    if (-not (Test-Path $msMpiPaths['MPIFPTR_H'])) {
+        Write-Host "  MISSING: mpifptr.h = $($msMpiPaths['MPIFPTR_H'])" -ForegroundColor Red
+        $missingPaths += 'MPIFPTR_H'
+    } else {
+        Write-Host "  Found: mpifptr.h = $($msMpiPaths['MPIFPTR_H'])" -ForegroundColor Green
+    }
+    
+    # Validate all three libraries exist
+    if (-not (Test-Path $msmpiLib)) {
+        Write-Host "  MISSING: msmpi.lib = $msmpiLib" -ForegroundColor Red
+        $missingPaths += 'msmpi.lib'
+    } else {
+        Write-Host "  Found: msmpi.lib = $msmpiLib" -ForegroundColor Green
+    }
+    
+    if (-not (Test-Path $msmpifecLib)) {
+        Write-Host "  MISSING: msmpifec.lib = $msmpifecLib" -ForegroundColor Red
+        $missingPaths += 'msmpifec.lib'
+    } else {
+        Write-Host "  Found: msmpifec.lib = $msmpifecLib" -ForegroundColor Green
+    }
+    
+    if (-not (Test-Path $msmpifmcLib)) {
+        Write-Host "  MISSING: msmpifmc.lib = $msmpifmcLib" -ForegroundColor Red
+        $missingPaths += 'msmpifmc.lib'
+    } else {
+        Write-Host "  Found: msmpifmc.lib = $msmpifmcLib" -ForegroundColor Green
+    }
+    
+    # Also validate directory paths
+    foreach ($key in @('MPIEXEC', 'SDK_ROOT', 'SDK_INCLUDE_BASE', 'SDK_INCLUDE_ARCH', 'SDK_LIB_DIR')) {
+        $path = $msMpiPaths[$key]
+        if (Test-Path $path) {
+            Write-Host "  Found: $key = $path" -ForegroundColor Green
+        } else {
+            Write-Host "  MISSING: $key = $path" -ForegroundColor Red
+            $missingPaths += $key
+        }
+    }
+    
+    if ($missingPaths.Count -gt 0) {
+        Write-Host ""
+        Write-Host "ERROR: MS-MPI SDK incomplete; need mpif.h + mpifptr.h + msmpi.lib + msmpifec.lib + msmpifmc.lib" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Missing components:" -ForegroundColor Yellow
+        foreach ($key in $missingPaths) {
+            if ($key -match '\.lib$') {
+                Write-Host "  - $key" -ForegroundColor Yellow
+            } else {
+                Write-Host "  - $key : $($msMpiPaths[$key])" -ForegroundColor Yellow
+            }
+        }
+        Write-Host ""
+        Write-Host "Library directory: $msmpiLibDir" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Download from: https://www.microsoft.com/en-us/download/details.aspx?id=57467" -ForegroundColor Cyan
+        Write-Host ""
+        exit 1
+    }
+    
+    # Workaround C: Copy mpifptr.h into QE include directory for MS-MPI Fortran builds
+    Write-Host "Workaround C: copying mpifptr.h into QE include directory..." -ForegroundColor Yellow
+    $src = Join-Path $msmpiSdk "Include\x64\mpifptr.h"
+    $qeIncludeDir = Join-Path $QESource "include"
+    $dst = Join-Path $qeIncludeDir "mpifptr.h"
+    
+    # Verify source exists
+    if (-not (Test-Path $src)) {
+        throw "ERROR: Workaround C failed - source file not found: $src"
+    }
+    
+    # Ensure QE include directory exists
+    if (-not (Test-Path $qeIncludeDir)) {
+        throw "ERROR: Workaround C failed - QE include directory does not exist: $qeIncludeDir (check QE source root: $QESource)"
+    }
+    
+    # Copy the file
+    Copy-Item -Path $src -Destination $dst -Force -ErrorAction Stop
+    
+    # Verify destination exists after copy
+    if (-not (Test-Path $dst)) {
+        throw "ERROR: Workaround C failed - destination file was not created: $dst"
+    }
+    
+    # Get file info and print success message
+    $info = Get-Item $dst
+    Write-Host "Workaround C: copied mpifptr.h into QE include directory" -ForegroundColor Green
+    Write-Host "  Source: $src" -ForegroundColor White
+    Write-Host "  Destination: $dst" -ForegroundColor White
+    Write-Host "  File size: $($info.Length) bytes, LastWriteTime: $($info.LastWriteTime)" -ForegroundColor White
+    Write-Host ""
+}
 
 # Step 3: Check for Visual Studio Build Tools (required for linker)
 # Intel compilers on Windows need MSVC linker from Visual Studio Build Tools
@@ -437,6 +575,61 @@ if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
     $cmakeConfigure += "-DVendorFFTW_LIBRARIES=`"$fftVendorLibraries`""
 }
 
+# Add MS-MPI configuration when MPI is enabled
+if ($mpiFlag -eq "ON") {
+    # Force QE to use mpif.h (MS-MPI typically does not provide Fortran mpi module)
+    $cmakeConfigure += "-DQE_ENABLE_MPI_MODULE=OFF"
+    
+    # Add CMAKE_MODULE_PATH to use our custom FindMPI.cmake shim
+    # This bypasses CMake's built-in FindMPI to avoid MPI_Fortran_WORKS try_compile tests
+    $cmakeModulePath = Join-Path $ScriptDir "cmake"
+    $cmakeModulePathCmake = $cmakeModulePath -replace '\\', '/'
+    $cmakeConfigure += "-DCMAKE_MODULE_PATH=`"$cmakeModulePathCmake`""
+    
+    # Convert Windows paths to CMake-friendly format (forward slashes)
+    $msMpiExec = $msMpiPaths['MPIEXEC'] -replace '\\', '/'
+    $msMpiHome = $msMpiPaths['SDK_ROOT'] -replace '\\', '/'
+    $msMpiIncBase = $msMpiPaths['SDK_INCLUDE_BASE'] -replace '\\', '/'
+    $msMpiIncArch = $msMpiPaths['SDK_INCLUDE_ARCH'] -replace '\\', '/'
+    $msMpiLib = $msMpiPaths['SDK_LIB'] -replace '\\', '/'
+    $msMpiLibFec = $msMpiPaths['SDK_LIB_FEC'] -replace '\\', '/'
+    $msMpiLibFmc = $msMpiPaths['SDK_LIB_FMC'] -replace '\\', '/'
+    
+    # Critical: prevent FindMPI from selecting Intel mpiifx.bat by forcing the MPI Fortran compiler to be the real ifx
+    $ifxPathCmake = $ifxPath -replace '\\', '/'
+    
+    # Pass both include directories (base and x64) - semicolon-separated for CMake
+    $msMpiIncDirs = "$msMpiIncBase;$msMpiIncArch"
+    
+    # Build Fortran library list: msmpifec.lib;msmpifmc.lib;msmpi.lib (order matters)
+    $msMpiFortranLibs = "$msMpiLibFec;$msMpiLibFmc;$msMpiLib"
+    
+    # Log MS-MPI library configuration
+    Write-Host "=== MS-MPI Library Configuration ===" -ForegroundColor Cyan
+    Write-Host "  Library directory: $msmpiLibDir" -ForegroundColor White
+    Write-Host "  Resolved library paths:" -ForegroundColor White
+    Write-Host "    msmpi.lib: $msmpiLib" -ForegroundColor Gray
+    Write-Host "    msmpifec.lib: $msmpifecLib" -ForegroundColor Gray
+    Write-Host "    msmpifmc.lib: $msmpifmcLib" -ForegroundColor Gray
+    Write-Host "  CMake paths (forward slashes):" -ForegroundColor White
+    Write-Host "    msmpi.lib: $msMpiLib" -ForegroundColor Gray
+    Write-Host "    msmpifec.lib: $msMpiLibFec" -ForegroundColor Gray
+    Write-Host "    msmpifmc.lib: $msMpiLibFmc" -ForegroundColor Gray
+    Write-Host "  MPI_C_LIBRARIES: $msMpiLib" -ForegroundColor White
+    Write-Host "  MPI_Fortran_LIBRARIES: $msMpiFortranLibs" -ForegroundColor White
+    Write-Host ""
+    
+    # Force FindMPI to use MSMPI and skip compiler wrappers
+    $cmakeConfigure += "-DMPI_GUESS_LIBRARY_NAME=MSMPI"
+    $cmakeConfigure += "-DMPI_SKIP_COMPILER_WRAPPER=TRUE"
+    $cmakeConfigure += "-DMPIEXEC_EXECUTABLE=`"$msMpiExec`""
+    $cmakeConfigure += "-DMPI_HOME=`"$msMpiHome`""
+    $cmakeConfigure += "-DMPI_Fortran_COMPILER=`"$ifxPathCmake`""
+    $cmakeConfigure += "-DMPI_Fortran_INCLUDE_DIRS=`"$msMpiIncDirs`""
+    $cmakeConfigure += "-DMPI_C_LIBRARIES=`"$msMpiLib`""
+    $cmakeConfigure += "-DMPI_Fortran_LIBRARIES=`"$msMpiFortranLibs`""
+}
+
 # Convert to single string for cmd.exe
 $cmakeConfigure = $cmakeConfigure -join " "
 
@@ -519,6 +712,18 @@ try {
     $configureCmd = "$vsInitPrefix && $oneApiInit && $cmakeConfigure"
     $buildCmd = "$vsInitPrefix && $oneApiInit && $cmakeBuild"
     
+    # Set MS-MPI environment variables before CMake configure (only when MPI is enabled)
+    if ($mpiFlag -eq "ON") {
+        $env:MSMPI_INC = $msMpiPaths['SDK_INCLUDE_BASE']
+        $env:MSMPI_LIB64 = $msMpiPaths['SDK_LIB_DIR']
+        Write-Host "=== MS-MPI Environment Variables ===" -ForegroundColor Cyan
+        Write-Host "MSMPI_INC: $env:MSMPI_INC" -ForegroundColor White
+        Write-Host "MSMPI_LIB64: $env:MSMPI_LIB64" -ForegroundColor White
+        Write-Host ""
+        Write-Host "MS-MPI Fortran include dirs: $($msMpiPaths['SDK_INCLUDE_BASE']) ; $($msMpiPaths['SDK_INCLUDE_ARCH'])" -ForegroundColor Cyan
+        Write-Host ""
+    }
+    
     # Log library configuration before running CMake
     Write-Host "=== Library Configuration ===" -ForegroundColor Cyan
     Write-Host "BLAS_LIBRARIES: $blasLapackLibraries" -ForegroundColor White
@@ -533,7 +738,9 @@ try {
     Write-Host ""
     
     Write-Host "=== CMake Configuration ===" -ForegroundColor Yellow
-    & cmd.exe /c $configureCmd
+    # Capture configure output to verify MS-MPI shim was used
+    $configureOutput = & cmd.exe /c $configureCmd 2>&1 | Out-String
+    Write-Host $configureOutput
     $configureExit = $LASTEXITCODE
     if ($configureExit -ne 0) {
         Write-Host ""
@@ -545,6 +752,42 @@ try {
             Write-Host ""
         }
         exit $configureExit
+    }
+    
+    # Verify MS-MPI shim was used (only when MPI is enabled)
+    if ($mpiFlag -eq "ON") {
+        Write-Host ""
+        Write-Host "=== Verifying MS-MPI shim usage ===" -ForegroundColor Cyan
+        if ($configureOutput -match "Using MS-MPI shim") {
+            Write-Host "  OK: Found 'Using MS-MPI shim' in CMake output" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: 'Using MS-MPI shim' not found in CMake output" -ForegroundColor Yellow
+            Write-Host "  The custom FindMPI.cmake shim may not have been used" -ForegroundColor Yellow
+        }
+        
+        # Check CMakeCache.txt does NOT mention impi / mpiifx
+        $cmakeCacheFile = Join-Path $BuildDir "CMakeCache.txt"
+        if (Test-Path $cmakeCacheFile) {
+            $impiMatches = Select-String -Path $cmakeCacheFile -Pattern 'impi' -CaseSensitive:$false
+            $mpiifxMatches = Select-String -Path $cmakeCacheFile -Pattern 'mpiifx' -CaseSensitive:$false
+            
+            if ($impiMatches) {
+                Write-Host "  WARNING: Found 'impi' references in CMakeCache.txt (Intel MPI detected)" -ForegroundColor Yellow
+                $impiMatches | ForEach-Object { Write-Host "    $($_.Line)" -ForegroundColor Gray }
+            } else {
+                Write-Host "  OK: No 'impi' references in CMakeCache.txt" -ForegroundColor Green
+            }
+            
+            if ($mpiifxMatches) {
+                Write-Host "  WARNING: Found 'mpiifx' references in CMakeCache.txt (Intel MPI wrapper detected)" -ForegroundColor Yellow
+                $mpiifxMatches | ForEach-Object { Write-Host "    $($_.Line)" -ForegroundColor Gray }
+            } else {
+                Write-Host "  OK: No 'mpiifx' references in CMakeCache.txt" -ForegroundColor Green
+            }
+        } else {
+            Write-Host "  WARNING: CMakeCache.txt not found for verification" -ForegroundColor Yellow
+        }
+        Write-Host ""
     }
     
     # Validate resolved library paths from CMakeCache.txt
@@ -595,6 +838,50 @@ try {
             Write-Host "CMAKE_C_FLAGS_RELEASE: $cFlagsValue" -ForegroundColor White
         } else {
             Write-Host "CMAKE_C_FLAGS_RELEASE: (not found in cache)" -ForegroundColor Yellow
+        }
+        
+        # Extract MPI-related cache values (post-configure sanity check)
+        if ($mpiFlag -eq "ON") {
+            # Extract MPI_GUESS_LIBRARY_NAME
+            $mpiGuessLibLine = Select-String -Path $cmakeCacheFile -Pattern '^MPI_GUESS_LIBRARY_NAME:STRING=' | Select-Object -First 1
+            if ($mpiGuessLibLine) {
+                $mpiGuessLibValue = $mpiGuessLibLine.Line -replace '^MPI_GUESS_LIBRARY_NAME:STRING=', ''
+                Write-Host "MPI_GUESS_LIBRARY_NAME: $mpiGuessLibValue" -ForegroundColor White
+            } else {
+                Write-Host "MPI_GUESS_LIBRARY_NAME: (not found in cache)" -ForegroundColor Yellow
+            }
+            
+            # Extract MPI_SKIP_COMPILER_WRAPPER
+            $mpiSkipWrapperLine = Select-String -Path $cmakeCacheFile -Pattern '^MPI_SKIP_COMPILER_WRAPPER:BOOL=' | Select-Object -First 1
+            if ($mpiSkipWrapperLine) {
+                $mpiSkipWrapperValue = $mpiSkipWrapperLine.Line -replace '^MPI_SKIP_COMPILER_WRAPPER:BOOL=', ''
+                Write-Host "MPI_SKIP_COMPILER_WRAPPER: $mpiSkipWrapperValue" -ForegroundColor White
+            } else {
+                Write-Host "MPI_SKIP_COMPILER_WRAPPER: (not found in cache)" -ForegroundColor Yellow
+            }
+            
+            # Extract MPI_Fortran_COMPILER (should be ifx.exe, not mpiifx.bat)
+            $mpiFortranCompilerLine = Select-String -Path $cmakeCacheFile -Pattern '^MPI_Fortran_COMPILER:STRING=' | Select-Object -First 1
+            if ($mpiFortranCompilerLine) {
+                $mpiFortranCompilerValue = $mpiFortranCompilerLine.Line -replace '^MPI_Fortran_COMPILER:STRING=', ''
+                Write-Host "MPI_Fortran_COMPILER: $mpiFortranCompilerValue" -ForegroundColor White
+            } else {
+                Write-Host "MPI_Fortran_COMPILER: (not found in cache)" -ForegroundColor Yellow
+            }
+            
+            # Extract MPI_Fortran_LIB_NAMES (should NOT be impi - success criteria)
+            $mpiFortranLibNamesLine = Select-String -Path $cmakeCacheFile -Pattern '^MPI_Fortran_LIB_NAMES:STRING=' | Select-Object -First 1
+            if ($mpiFortranLibNamesLine) {
+                $mpiFortranLibNamesValue = $mpiFortranLibNamesLine.Line -replace '^MPI_Fortran_LIB_NAMES:STRING=', ''
+                Write-Host "MPI_Fortran_LIB_NAMES: $mpiFortranLibNamesValue" -ForegroundColor White
+                if ($mpiFortranLibNamesValue -eq "impi") {
+                    Write-Host "  WARNING: MPI_Fortran_LIB_NAMES is 'impi' - Intel MPI detected instead of MS-MPI!" -ForegroundColor Red
+                } else {
+                    Write-Host "  OK: MPI_Fortran_LIB_NAMES is not 'impi'" -ForegroundColor Green
+                }
+            } else {
+                Write-Host "MPI_Fortran_LIB_NAMES: (not found in cache)" -ForegroundColor Yellow
+            }
         }
     } else {
         Write-Host "  Warning: CMakeCache.txt not found at $cmakeCacheFile" -ForegroundColor Yellow
@@ -674,14 +961,86 @@ set_target_properties(VendorFFTW PROPERTIES OUTPUT_NAME "VendorFFTW")
     }
     
     Write-Host "=== CMake Build (verbose) ===" -ForegroundColor Yellow
-    & cmd.exe /c $buildCmd
-    $exitCode = $LASTEXITCODE
+    
+    # Capture full stdout+stderr to log file
+    $buildLogFile = Join-Path $BuildDir "build.log"
+    Write-Host "  Build output is being redirected to: $buildLogFile" -ForegroundColor Cyan
+    Write-Host "  Check build.log for full build output" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Use Start-Process with redirection to capture output to log file
+    # This is more reliable than ProcessStartInfo with event handlers
+    # Wrap the entire command in parentheses and redirect
+    $buildCmdWithRedirect = "($buildCmd) > `"$buildLogFile`" 2>&1"
+    
+    try {
+        $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c $buildCmdWithRedirect" -NoNewWindow -Wait -PassThru
+        
+        $exitCode = $proc.ExitCode
+    } catch {
+        Write-Host "  ERROR: Failed to execute build command: $_" -ForegroundColor Red
+        $exitCode = 1
+        # Ensure log file exists even on error
+        if (-not (Test-Path $buildLogFile)) {
+            "Build command failed: $_" | Out-File -FilePath $buildLogFile -Encoding UTF8
+        }
+        throw
+    }
     
     # Check if build succeeded
     if ($exitCode -ne 0) {
         Write-Host ""
         Write-Host "ERROR: Build failed with exit code $exitCode" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "=== Extracting error context from build log ===" -ForegroundColor Yellow
+        
+        if (Test-Path $buildLogFile) {
+            # Find first occurrence of "FAILED:" or "error:" with context (+-30 lines)
+            $failedMatch = Select-String -Path $buildLogFile -Pattern "FAILED:" -Context 30,30 | Select-Object -First 1
+            $errorMatch = Select-String -Path $buildLogFile -Pattern "error:" -Context 30,30 -CaseSensitive:$false | Select-Object -First 1
+            
+            if ($failedMatch) {
+                Write-Host ""
+                Write-Host "First FAILED: occurrence (with context):" -ForegroundColor Cyan
+                Write-Host "---" -ForegroundColor Gray
+                $failedMatch.Context.PreContext | ForEach-Object { Write-Host $_ }
+                Write-Host $failedMatch.Line -ForegroundColor Red
+                $failedMatch.Context.PostContext | ForEach-Object { Write-Host $_ }
+                Write-Host "---" -ForegroundColor Gray
+            } elseif ($errorMatch) {
+                Write-Host ""
+                Write-Host "First error: occurrence (with context):" -ForegroundColor Cyan
+                Write-Host "---" -ForegroundColor Gray
+                $errorMatch.Context.PreContext | ForEach-Object { Write-Host $_ }
+                Write-Host $errorMatch.Line -ForegroundColor Red
+                $errorMatch.Context.PostContext | ForEach-Object { Write-Host $_ }
+                Write-Host "---" -ForegroundColor Gray
+            } else {
+                Write-Host "  No 'FAILED:' or 'error:' patterns found in log" -ForegroundColor Yellow
+                Write-Host "  Showing last 60 lines of build log:" -ForegroundColor Yellow
+                Write-Host "---" -ForegroundColor Gray
+                Get-Content $buildLogFile -Tail 60 | ForEach-Object { Write-Host $_ }
+                Write-Host "---" -ForegroundColor Gray
+            }
+            Write-Host ""
+            Write-Host "Full build log available at: $buildLogFile" -ForegroundColor Cyan
+        } else {
+            Write-Host "  WARNING: Build log file not found at $buildLogFile" -ForegroundColor Yellow
+        }
+        
+        Write-Host ""
         exit $exitCode
+    } else {
+        # Build succeeded - show last 60 lines
+        Write-Host ""
+        Write-Host "Build completed successfully. Showing last 60 lines:" -ForegroundColor Green
+        Write-Host "---" -ForegroundColor Gray
+        if (Test-Path $buildLogFile) {
+            Get-Content $buildLogFile -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        }
+        Write-Host "---" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "Full build log available at: $buildLogFile" -ForegroundColor Cyan
     }
 } finally {
     # Restore error action preference
