@@ -1,4 +1,4 @@
-name: QE build (Windows MinGW)
+name: QE build (Windows MinGW serial build)
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: Wannier90 Windows oneAPI
+name: Wannier90 Windows oneAPI serial build
 
 on:
   push:

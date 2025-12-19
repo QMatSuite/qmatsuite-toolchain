@@ -1,4 +1,4 @@
-name: QE Windows oneAPI
+name: QE Windows oneAPI serial build
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: QE Windows oneAPI MS-MPI
+name: QE Windows oneAPI MS-MPI parallel build
 
 on:
   push:
