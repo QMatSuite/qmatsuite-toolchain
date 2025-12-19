@@ -20,7 +20,6 @@ set(MSMPI_INCLUDE_DIRS "${MSMPI_INCLUDE_DIR_BASE};${MSMPI_INCLUDE_DIR_ARCH}")
 set(MSMPI_LIB_DIR "${MSMPI_SDK_ROOT}/Lib/x64")
 set(MSMPI_LIB "${MSMPI_LIB_DIR}/msmpi.lib")
 set(MSMPI_FEC_LIB "${MSMPI_LIB_DIR}/msmpifec.lib")
-set(MSMPI_FMC_LIB "${MSMPI_LIB_DIR}/msmpifmc.lib")
 
 # Locate mpiexec
 set(MSMPI_MPIEXEC "C:/Program Files/Microsoft MPI/Bin/mpiexec.exe")
@@ -39,10 +38,6 @@ if (NOT EXISTS "${MSMPI_FEC_LIB}")
     message(FATAL_ERROR "MS-MPI shim: msmpifec.lib not found at ${MSMPI_FEC_LIB}. Library directory: ${MSMPI_LIB_DIR}")
 endif()
 
-if (NOT EXISTS "${MSMPI_FMC_LIB}")
-    message(FATAL_ERROR "MS-MPI shim: msmpifmc.lib not found at ${MSMPI_FMC_LIB}. Library directory: ${MSMPI_LIB_DIR}")
-endif()
-
 if (NOT EXISTS "${MSMPI_MPIEXEC}")
     message(FATAL_ERROR "MS-MPI shim: mpiexec.exe not found at ${MSMPI_MPIEXEC}")
 endif()
@@ -56,19 +51,19 @@ set(MPI_Fortran_HAVE_F77_HEADER TRUE)
 set(MPI_C_INCLUDE_DIRS "${MSMPI_INCLUDE_DIRS}" CACHE STRING "MPI C include directories" FORCE)
 set(MPI_Fortran_INCLUDE_DIRS "${MSMPI_INCLUDE_DIRS}" CACHE STRING "MPI Fortran include directories" FORCE)
 set(MPI_C_LIBRARIES "${MSMPI_LIB}" CACHE STRING "MPI C libraries" FORCE)
-set(MPI_Fortran_LIBRARIES "${MSMPI_FEC_LIB};${MSMPI_FMC_LIB};${MSMPI_LIB}" CACHE STRING "MPI Fortran libraries" FORCE)
+set(MPI_Fortran_LIBRARIES "${MSMPI_FEC_LIB};${MSMPI_LIB}" CACHE STRING "MPI Fortran libraries" FORCE)
 set(MPIEXEC_EXECUTABLE "${MSMPI_MPIEXEC}" CACHE FILEPATH "MPI executable" FORCE)
 set(MPIEXEC_NUMPROC_FLAG "-n")
 set(MPIEXEC_PREFLAGS "")
 
 # Create/update imported targets expected by QE
-# MPI::MPI_Fortran - must link all three MS-MPI libraries
+# MPI::MPI_Fortran - must link msmpifec.lib and msmpi.lib
 if (NOT TARGET MPI::MPI_Fortran)
     add_library(MPI::MPI_Fortran INTERFACE IMPORTED)
 endif()
 set_target_properties(MPI::MPI_Fortran PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${MSMPI_INCLUDE_DIRS}"
-    INTERFACE_LINK_LIBRARIES "${MSMPI_FEC_LIB};${MSMPI_FMC_LIB};${MSMPI_LIB}"
+    INTERFACE_LINK_LIBRARIES "${MSMPI_FEC_LIB};${MSMPI_LIB}"
 )
 
 # MPI::MPI_C - optional but good hygiene
@@ -81,5 +76,5 @@ set_target_properties(MPI::MPI_C PROPERTIES
 )
 
 # Print status
-message(STATUS "Using MS-MPI shim: includes=${MSMPI_INCLUDE_DIRS} libs=msmpifec;msmpifmc;msmpi")
+message(STATUS "Using MS-MPI shim: includes=${MSMPI_INCLUDE_DIRS} libs=msmpifec;msmpi")
 

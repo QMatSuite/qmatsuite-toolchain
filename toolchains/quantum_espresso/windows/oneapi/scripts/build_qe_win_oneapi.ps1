@@ -191,15 +191,10 @@ if ($mpiFlag -eq "ON") {
     $msMpiPaths['MPIF_H'] = Join-Path $msmpiIncBase "mpif.h"
     $msMpiPaths['MPIFPTR_H'] = Join-Path $msmpiIncArch "mpifptr.h"
     
-    # Define all MS-MPI libraries
+    # Define MS-MPI library (only msmpi.lib needed for validation)
+    # The FindMPI shim will handle all library linking
     $msmpiLib = Join-Path $msmpiLibDir "msmpi.lib"
-    $msmpifecLib = Join-Path $msmpiLibDir "msmpifec.lib"
-    $msmpifmcLib = Join-Path $msmpiLibDir "msmpifmc.lib"
-    
-    # Store library paths for later use
     $msMpiPaths['SDK_LIB'] = $msmpiLib
-    $msMpiPaths['SDK_LIB_FEC'] = $msmpifecLib
-    $msMpiPaths['SDK_LIB_FMC'] = $msmpifmcLib
     
     # Validate required files exist
     $missingPaths = @()
@@ -220,26 +215,12 @@ if ($mpiFlag -eq "ON") {
         Write-Host "  Found: mpifptr.h = $($msMpiPaths['MPIFPTR_H'])" -ForegroundColor Green
     }
     
-    # Validate all three libraries exist
+    # Validate msmpi.lib exists (FindMPI shim will validate msmpifec.lib)
     if (-not (Test-Path $msmpiLib)) {
         Write-Host "  MISSING: msmpi.lib = $msmpiLib" -ForegroundColor Red
         $missingPaths += 'msmpi.lib'
     } else {
         Write-Host "  Found: msmpi.lib = $msmpiLib" -ForegroundColor Green
-    }
-    
-    if (-not (Test-Path $msmpifecLib)) {
-        Write-Host "  MISSING: msmpifec.lib = $msmpifecLib" -ForegroundColor Red
-        $missingPaths += 'msmpifec.lib'
-    } else {
-        Write-Host "  Found: msmpifec.lib = $msmpifecLib" -ForegroundColor Green
-    }
-    
-    if (-not (Test-Path $msmpifmcLib)) {
-        Write-Host "  MISSING: msmpifmc.lib = $msmpifmcLib" -ForegroundColor Red
-        $missingPaths += 'msmpifmc.lib'
-    } else {
-        Write-Host "  Found: msmpifmc.lib = $msmpifmcLib" -ForegroundColor Green
     }
     
     # Also validate directory paths
@@ -255,7 +236,7 @@ if ($mpiFlag -eq "ON") {
     
     if ($missingPaths.Count -gt 0) {
         Write-Host ""
-        Write-Host "ERROR: MS-MPI SDK incomplete; need mpif.h + mpifptr.h + msmpi.lib + msmpifec.lib + msmpifmc.lib" -ForegroundColor Red
+        Write-Host "ERROR: MS-MPI SDK incomplete; need mpif.h + mpifptr.h + msmpi.lib" -ForegroundColor Red
         Write-Host ""
         Write-Host "Missing components:" -ForegroundColor Yellow
         foreach ($key in $missingPaths) {
@@ -265,8 +246,6 @@ if ($mpiFlag -eq "ON") {
                 Write-Host "  - $key : $($msMpiPaths[$key])" -ForegroundColor Yellow
             }
         }
-        Write-Host ""
-        Write-Host "Library directory: $msmpiLibDir" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "Download from: https://www.microsoft.com/en-us/download/details.aspx?id=57467" -ForegroundColor Cyan
         Write-Host ""
@@ -591,9 +570,6 @@ if ($mpiFlag -eq "ON") {
     $msMpiHome = $msMpiPaths['SDK_ROOT'] -replace '\\', '/'
     $msMpiIncBase = $msMpiPaths['SDK_INCLUDE_BASE'] -replace '\\', '/'
     $msMpiIncArch = $msMpiPaths['SDK_INCLUDE_ARCH'] -replace '\\', '/'
-    $msMpiLib = $msMpiPaths['SDK_LIB'] -replace '\\', '/'
-    $msMpiLibFec = $msMpiPaths['SDK_LIB_FEC'] -replace '\\', '/'
-    $msMpiLibFmc = $msMpiPaths['SDK_LIB_FMC'] -replace '\\', '/'
     
     # Critical: prevent FindMPI from selecting Intel mpiifx.bat by forcing the MPI Fortran compiler to be the real ifx
     $ifxPathCmake = $ifxPath -replace '\\', '/'
@@ -601,26 +577,14 @@ if ($mpiFlag -eq "ON") {
     # Pass both include directories (base and x64) - semicolon-separated for CMake
     $msMpiIncDirs = "$msMpiIncBase;$msMpiIncArch"
     
-    # Build Fortran library list: msmpifec.lib;msmpifmc.lib;msmpi.lib (order matters)
-    $msMpiFortranLibs = "$msMpiLibFec;$msMpiLibFmc;$msMpiLib"
-    
-    # Log MS-MPI library configuration before CMake configure
-    Write-Host "=== MS-MPI Library Configuration (before CMake configure) ===" -ForegroundColor Cyan
-    Write-Host "  Library directory: $msmpiLibDir" -ForegroundColor White
-    Write-Host "  Final resolved values passed to CMake:" -ForegroundColor White
-    Write-Host "    MPI_C_LIBRARIES: $msMpiLib" -ForegroundColor Yellow
-    Write-Host "    MPI_Fortran_LIBRARIES: $msMpiFortranLibs" -ForegroundColor Yellow
-    Write-Host ""
-    
     # Force FindMPI to use MSMPI and skip compiler wrappers
+    # Note: The FindMPI shim handles all library linking, so we don't pass MPI_*_LIBRARIES here
     $cmakeConfigure += "-DMPI_GUESS_LIBRARY_NAME=MSMPI"
     $cmakeConfigure += "-DMPI_SKIP_COMPILER_WRAPPER=TRUE"
     $cmakeConfigure += "-DMPIEXEC_EXECUTABLE=`"$msMpiExec`""
     $cmakeConfigure += "-DMPI_HOME=`"$msMpiHome`""
     $cmakeConfigure += "-DMPI_Fortran_COMPILER=`"$ifxPathCmake`""
     $cmakeConfigure += "-DMPI_Fortran_INCLUDE_DIRS=`"$msMpiIncDirs`""
-    $cmakeConfigure += "-DMPI_C_LIBRARIES=`"$msMpiLib`""
-    $cmakeConfigure += "-DMPI_Fortran_LIBRARIES=`"$msMpiFortranLibs`""
 }
 
 # Convert to single string for cmd.exe

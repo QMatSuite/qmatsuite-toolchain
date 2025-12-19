@@ -467,6 +467,116 @@ $env:VCToolsInstallDir="C:\Program Files\Microsoft Visual Studio\2022\Community\
 .\scripts\stage_qe_windows.ps1
 ```
 
+## MS-MPI Support for MPI Builds
+
+When building with MPI enabled (default, use `-NoMpi` for serial builds), this toolchain uses **Microsoft MPI (MS-MPI)** instead of Intel MPI. MS-MPI is the standard MPI implementation for Windows and integrates well with Intel oneAPI compilers.
+
+### MS-MPI Installation
+
+**Required components:**
+1. **MS-MPI Runtime** - For running MPI programs (`mpiexec.exe`)
+   - Download from: https://www.microsoft.com/en-us/download/details.aspx?id=57467
+   - Install location: `C:\Program Files\Microsoft MPI\Bin\mpiexec.exe`
+
+2. **MS-MPI SDK** - For building MPI programs (headers and import libraries)
+   - Download from: https://www.microsoft.com/en-us/download/details.aspx?id=57467
+   - Install location: `C:\Program Files (x86)\Microsoft SDKs\MPI`
+   - Required files:
+     - `Include\mpif.h` - Fortran MPI header
+     - `Include\x64\mpifptr.h` - Fortran pointer header (architecture-specific)
+     - `Lib\x64\msmpi.lib` - C MPI import library
+     - `Lib\x64\msmpifec.lib` - Fortran MPI import library (required for Fortran MPI symbols)
+
+### MS-MPI Build Fixes
+
+This toolchain implements several workarounds to make MS-MPI work correctly with Intel `ifx` and QE:
+
+#### 1. **mpifptr.h Include Path Issue**
+
+**Problem:** MS-MPI's `mpif.h` includes `mpifptr.h`, which is located in `Include\x64\` (architecture-specific). The Fortran compiler couldn't find it because only the base `Include\` directory was in the include path.
+
+**Solution:** The build script automatically copies `mpifptr.h` from `Include\x64\` to the QE `include\` directory (which is already on the compiler's `-I` path) before CMake configure. This ensures `mpifptr.h` is found when `mpif.h` includes it.
+
+**Implementation:** See "Workaround C" in `scripts/build_qe_win_oneapi.ps1` (Step 2b).
+
+#### 2. **Unresolved MPI_* Symbols at Link Time**
+
+**Problem:** QE links via CMake's `MPI::MPI_Fortran` imported target. Initially, only `msmpi.lib` was linked, causing unresolved symbols like `MPI_INIT`, `MPI_GATHER`, `MPI_COMM_RANK`, etc.
+
+**Root cause:** CMake's built-in `FindMPI` module fails `MPI_Fortran_WORKS` try-compile tests with Intel `ifx` + MS-MPI on Windows, leading to incomplete MPI configuration.
+
+**Solution:** A custom `FindMPI.cmake` shim (`scripts/cmake/FindMPI.cmake`) bypasses CMake's built-in FindMPI and explicitly configures MS-MPI:
+
+- **Includes:** Both `Include\` and `Include\x64\` directories
+- **Libraries:** `MPI::MPI_Fortran` links `msmpifec.lib` and `msmpi.lib` (in that order)
+- **No try-compile tests:** The shim directly sets MPI variables without running problematic tests
+
+**Key points:**
+- The shim is automatically used via `CMAKE_MODULE_PATH` when MPI is enabled
+- All library linking is handled by the shim's imported targets
+- The build script does NOT pass `MPI_*_LIBRARIES` to CMake (the shim owns this)
+
+#### 3. **Preventing Intel MPI Selection**
+
+**Problem:** CMake's `FindMPI` might select Intel MPI (`mpiifx.bat` wrapper) if it's in PATH, even when MS-MPI is desired.
+
+**Solution:** The build script explicitly forces:
+- `MPI_Fortran_COMPILER` = full path to `ifx.exe` (not `mpiifx.bat`)
+- `MPI_GUESS_LIBRARY_NAME=MSMPI`
+- `MPI_SKIP_COMPILER_WRAPPER=TRUE`
+
+### Verification
+
+After a successful MPI build, verify MS-MPI is configured correctly:
+
+1. **Check CMake configure output:**
+   ```
+   -- Using MS-MPI shim: includes=... libs=msmpifec;msmpi
+   ```
+
+2. **Check link command** (in `build.log` or verbose build output):
+   ```
+   ... msmpifec.lib ... msmpi.lib ...
+   ```
+
+3. **Verify no unresolved symbols:**
+   - Build should complete without `LNK2019` errors for MPI_* symbols
+   - Executables should link successfully
+
+### Build Script Behavior
+
+When MPI is enabled (`-NoMpi` not specified):
+
+1. **Validates MS-MPI installation:**
+   - Checks for `mpiexec.exe`
+   - Checks for `mpif.h` and `mpifptr.h`
+   - Checks for `msmpi.lib` (the shim validates `msmpifec.lib`)
+
+2. **Applies workarounds:**
+   - Copies `mpifptr.h` to QE include directory
+   - Sets MS-MPI environment variables (`MSMPI_INC`, `MSMPI_LIB64`)
+
+3. **Configures CMake:**
+   - Points `CMAKE_MODULE_PATH` to custom FindMPI shim
+   - Forces MS-MPI selection (not Intel MPI)
+   - Passes include directories (but NOT library paths - shim handles those)
+
+### Troubleshooting
+
+**"MS-MPI SDK incomplete" error:**
+- Ensure both MS-MPI Runtime and SDK are installed
+- Verify files exist at expected locations (see "MS-MPI Installation" above)
+
+**Unresolved MPI_* symbols:**
+- Verify the FindMPI shim was used (check for "Using MS-MPI shim" in CMake output)
+- Check that `msmpifec.lib` appears in the link command
+- Ensure a clean build (delete `build-win-oneapi-msmpi\` and reconfigure)
+
+**"Cannot open include file 'mpifptr.h'" error:**
+- The workaround should copy `mpifptr.h` automatically
+- Verify `upstream/qe/include/mpifptr.h` exists after configure
+- Check build script output for "Workaround C: copied mpifptr.h" message
+
 ## CMake / Windows workarounds applied
 
 These are the key fixes that made the Windows/oneAPI CMake flow reliable:
