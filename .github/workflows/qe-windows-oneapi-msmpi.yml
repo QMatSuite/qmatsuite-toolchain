@@ -1,0 +1,296 @@
+name: QE Windows oneAPI MS-MPI
+
+on:
+  push:
+    paths:
+      - 'toolchains/quantum_espresso/windows/oneapi/**'
+      - '.github/workflows/qe-windows-oneapi-msmpi.yml'
+  pull_request:
+    paths:
+      - 'toolchains/quantum_espresso/windows/oneapi/**'
+      - '.github/workflows/qe-windows-oneapi-msmpi.yml'
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Clean build directory before building (forces fresh build)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: windows-oneapi-qe-msmpi-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    # NOTE: Installs Intel oneAPI (compilers + MKL) and MS-MPI (Runtime + SDK).
+    # Builds QE with MPI enabled using MS-MPI.
+    runs-on: windows-latest
+    env:
+      ONEAPI_ROOT: 'C:\Program Files (x86)\Intel\oneAPI'
+      QE_ROOT: '${{ github.workspace }}\toolchains\quantum_espresso\windows\oneapi'
+      QE_SRC: '${{ github.workspace }}\toolchains\quantum_espresso\windows\oneapi\upstream\qe'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache QE source/build
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/quantum_espresso/windows/oneapi/upstream/qe
+          key: qe-oneapi-msmpi-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}
+          restore-keys: |
+            qe-oneapi-msmpi-${{ runner.os }}-
+
+      - name: Cache oneAPI installation
+        id: cache-oneapi-install
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\Program Files (x86)\Intel\oneAPI\compiler
+            C:\Program Files (x86)\Intel\oneAPI\mkl
+            C:\Program Files (x86)\Intel\oneAPI\setvars.bat
+            C:\Program Files (x86)\Intel\oneAPI\setvars-vcvarsall.bat
+          key: oneapi-install-2025.3.0-${{ runner.os }}-cpp-dpcpp-common-ifort-compiler-mkl-devel
+          restore-keys: |
+            oneapi-install-2025.3.0-${{ runner.os }}-
+            oneapi-install-${{ runner.os }}-
+
+      - name: Verify cached oneAPI installation
+        id: verify-install
+        continue-on-error: true
+        if: steps.cache-oneapi-install.outputs.cache-hit == 'true'
+        run: |
+          Write-Host "oneAPI installation restored from cache, verifying..."
+          if (-not (Test-Path "$env:ONEAPI_ROOT\setvars.bat")) {
+            Write-Warning "Cached oneAPI installation incomplete: setvars.bat not found"
+            exit 1
+          }
+          # Verify MKL is present
+          $mklPath = Join-Path $env:ONEAPI_ROOT "mkl\latest"
+          if (-not (Test-Path $mklPath)) {
+            Write-Warning "Cached oneAPI installation incomplete: MKL not found at $mklPath"
+            exit 1
+          }
+          Write-Host "Verified: oneAPI installation is complete and valid"
+
+      - name: Cache oneAPI installer
+        id: cache-installer
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true' || steps.verify-install.outcome != 'success'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .github/cache/oneapi-installer
+          key: oneapi-installer-2025.3.0-${{ runner.os }}
+          restore-keys: |
+            oneapi-installer-${{ runner.os }}-
+
+      - name: Install oneAPI (compilers + MKL) via offline installer
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true' || steps.verify-install.outcome != 'success'
+        # Install Intel oneAPI HPC Kit with compilers (ifx/icx) and MKL in one go.
+        # Based on oneapi-ci approach: extract installer, then use bootstrapper with config file.
+        # This avoids the slow/stuck installer issue when using --components flag directly on Windows.
+        # Reference: https://community.intel.com/t5/Intel-oneAPI-Math-Kernel-Library/Installing-and-setting-up-oneAPI-base-kit-on-GitHub-Actions-and/m-p/1376598
+        # HPC Kit 2025.3.0 URL - component IDs from https://oneapi-src.github.io/oneapi-ci/
+        run: |
+          $url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/3a871580-f839-46ed-aeae-685084127279/intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
+          $cacheDir = ".github/cache/oneapi-installer"
+          $cachedInstaller = Join-Path $cacheDir "intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
+          $installerExe = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
+          $extractDir = Join-Path $env:RUNNER_TEMP "oneapi_extracted"
+          $configFile = Join-Path $env:RUNNER_TEMP "oneapi_install_config.ini"
+          
+          # Use cached installer if available, otherwise download
+          if (Test-Path $cachedInstaller) {
+            Write-Host "Using cached oneAPI installer from $cachedInstaller"
+            Copy-Item -Path $cachedInstaller -Destination $installerExe -Force
+          } else {
+            Write-Host "Downloading oneAPI HPC Kit installer from $url"
+            New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+            Invoke-WebRequest -Uri $url -OutFile $installerExe
+            # Save to cache for next run
+            Copy-Item -Path $installerExe -Destination $cachedInstaller -Force
+            Write-Host "Cached installer for future runs"
+          }
+          
+          Write-Host "Extracting installer to $extractDir"
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          $extractLog = Join-Path $env:RUNNER_TEMP "extract.log"
+          
+          # Use Start-Process to properly wait for extraction and capture exit code
+          $extractProc = Start-Process -FilePath $installerExe -ArgumentList "-s", "-x", "-f", $extractDir, "--log", $extractLog -Wait -PassThru -NoNewWindow
+          if ($extractProc.ExitCode -ne 0) {
+            Write-Host "Extraction log contents:"
+            if (Test-Path $extractLog) {
+              Get-Content $extractLog -Tail 50
+            }
+            Write-Error "Extraction failed with exit code $($extractProc.ExitCode)"
+            exit 1
+          }
+          
+          Write-Host "Extraction completed successfully"
+          
+          Write-Host "Creating install config file for compilers + MKL"
+          # Component IDs from https://oneapi-src.github.io/oneapi-ci/
+          # intel.oneapi.win.cpp-dpcpp-common: C++ compiler (icx)
+          # intel.oneapi.win.ifort-compiler: Fortran compiler (ifx/ifort)
+          # intel.oneapi.win.mkl.devel: MKL development package
+          $configContent = @(
+            "eula=accept",
+            "components=intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.ifort-compiler:intel.oneapi.win.mkl.devel",
+            'p="NEED_VS2017_INTEGRATION=0 NEED_VS2019_INTEGRATION=0 NEED_VS2022_INTEGRATION=0"'
+          )
+          $configContent | Out-File -FilePath $configFile -Encoding ASCII
+          
+          $bootstrapper = Join-Path $extractDir "bootstrapper.exe"
+          if (-not (Test-Path $bootstrapper)) {
+            Write-Error "Bootstrapper not found at $bootstrapper"
+            exit 1
+          }
+          
+          Write-Host "Running bootstrapper to install compilers + MKL..."
+          $installLogDir = Join-Path $env:RUNNER_TEMP "install_logs"
+          New-Item -ItemType Directory -Path $installLogDir -Force | Out-Null
+          
+          # Use Start-Process to properly wait for installation and capture exit code
+          $installProc = Start-Process -FilePath $bootstrapper -ArgumentList "-s", "--action", "install", "--config", $configFile, "--log-dir", $installLogDir, "--eula", "accept" -Wait -PassThru -NoNewWindow
+          if ($installProc.ExitCode -ne 0) {
+            Write-Host "Installation log contents:"
+            Get-ChildItem $installLogDir -Filter "*.log" | ForEach-Object {
+              Write-Host "Log file: $($_.Name)"
+              Get-Content $_.FullName -Tail 30
+            }
+            Write-Error "oneAPI installation failed with exit code $($installProc.ExitCode)"
+            exit 1
+          }
+          
+          Write-Host "oneAPI installation completed successfully"
+
+      - name: Install MS-MPI Runtime and SDK
+        run: |
+          Write-Host "Installing MS-MPI Runtime and SDK via winget..."
+          winget install -e --id Microsoft.msmpi --accept-source-agreements --accept-package-agreements
+          winget install -e --id Microsoft.msmpisdk --accept-source-agreements --accept-package-agreements
+          
+          # Verify installation
+          $msmpiBin = "C:\Program Files\Microsoft MPI\Bin"
+          $msmpiSdk = "C:\Program Files (x86)\Microsoft SDKs\MPI"
+          if (-not (Test-Path $msmpiBin)) {
+            Write-Error "MS-MPI Runtime not found at $msmpiBin"
+            exit 1
+          }
+          if (-not (Test-Path $msmpiSdk)) {
+            Write-Error "MS-MPI SDK not found at $msmpiSdk"
+            exit 1
+          }
+          
+          # Add MS-MPI Bin to PATH for subsequent steps
+          $currentPath = $env:PATH
+          $newPath = "$msmpiBin;$currentPath"
+          "PATH=$newPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "MS-MPI Runtime and SDK installed successfully"
+          Write-Host "Added $msmpiBin to PATH"
+
+      - name: Set MKL environment for CMake
+        run: |
+          # Prefer existing MKLROOT; otherwise probe under ONEAPI_ROOT\mkl\*
+          function Resolve-MklRoot {
+            param([string]$OneApiRoot)
+            if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) { return $env:MKLROOT }
+            $candidate = Join-Path $OneApiRoot "mkl\latest"
+            if (Test-Path $candidate) { return $candidate }
+            $versions = Get-ChildItem -Path (Join-Path $OneApiRoot "mkl") -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+            foreach ($v in $versions) {
+              $cmakePath = Join-Path $v.FullName "lib\cmake\mkl"
+              if (Test-Path $cmakePath) { return $v.FullName }
+            }
+            return $null
+          }
+
+          $mklRoot = Resolve-MklRoot -OneApiRoot $env:ONEAPI_ROOT
+          if (-not $mklRoot) {
+            Write-Error "MKL not found under $env:ONEAPI_ROOT\mkl. Ensure oneAPI Base/HPC kit with MKL is installed."
+            exit 1
+          }
+
+          $env:MKLROOT = $mklRoot
+          $prefix = Join-Path $mklRoot "lib\cmake\mkl"
+          if (-not (Test-Path $prefix)) {
+            Write-Error "MKL CMake package dir not found at $prefix"
+            exit 1
+          }
+
+          $env:CMAKE_PREFIX_PATH = "$prefix;$env:CMAKE_PREFIX_PATH"
+
+          "MKLROOT=$mklRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CMAKE_PREFIX_PATH=$($env:CMAKE_PREFIX_PATH)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install build tools (cmake, ninja)
+        run: |
+          choco install --no-progress -y cmake ninja
+
+      - name: Verify oneAPI
+        run: |
+          if (-not (Test-Path "$env:ONEAPI_ROOT\setvars.bat")) {
+            Write-Error "setvars.bat not found at $env:ONEAPI_ROOT\setvars.bat"
+          }
+
+      - name: Refresh QE source (no patch)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1" -NoPatch
+
+      - name: Apply QE patches
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\apply_qe_patches.ps1" `
+            -QeDir "$env:QE_SRC" `
+            -PatchDir "$env:QE_ROOT\patches"
+
+      - name: Clean build directory (if requested)
+        if: inputs.clean_build == true
+        run: |
+          $buildDir = Join-Path $env:QE_SRC "build-win-oneapi-msmpi"
+          if (Test-Path $buildDir) {
+            Write-Host "Cleaning build directory: $buildDir"
+            Remove-Item -Recurse -Force $buildDir
+            Write-Host "Build directory cleaned"
+          } else {
+            Write-Host "Build directory does not exist, nothing to clean"
+          }
+
+      - name: Build QE (oneAPI, MS-MPI enabled)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1"
+
+      - name: Stage QE executables and runtime DLLs
+        id: stage
+        continue-on-error: true
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\stage_qe_windows.ps1" `
+            -BuildDir "upstream\qe\build-win-oneapi-msmpi" `
+            -DistDir "dist\win-oneapi-msmpi"
+
+      - name: Upload staged QE distribution
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-windows-oneapi-msmpi-dist
+          path: toolchains/quantum_espresso/windows/oneapi/dist/win-oneapi-msmpi/**
+          retention-days: 7
+
+      - name: Fail if staging failed
+        if: steps.stage.outcome == 'failure'
+        run: |
+          Write-Error "Staging failed (smoke test or other error). Artifact uploaded for inspection."
+          exit 1
+

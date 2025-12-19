@@ -39,6 +39,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Validate parameters
+if ([string]::IsNullOrWhiteSpace($BuildDir)) {
+    throw "BuildDir parameter cannot be null or empty."
+}
+if ([string]::IsNullOrWhiteSpace($DistDir)) {
+    throw "DistDir parameter cannot be null or empty."
+}
+
 #---------------- Helpers ----------------#
 function Get-DumpbinPath {
     # Prefer VS toolchain location if present
@@ -156,8 +164,15 @@ function Get-ExeDependentsDumpbin {
     }
     $capture = $false
     foreach ($line in $stdout -split "`r?`n") {
-        if ($line -match "Image has the following dependencies") { $capture = $true; continue }
-        if ($capture -and [string]::IsNullOrWhiteSpace($line)) { $capture = $false }
+        if ($line -match "Image has the following dependencies") { 
+            $capture = $true
+            continue 
+        }
+        # Stop capturing when we hit the Summary section or another section header
+        if ($capture -and ($line -match "^\s*Summary\s*$" -or $line -match "^\s*[A-Z].*:$")) { 
+            $capture = $false
+            break
+        }
         if ($capture -and $line -match "([A-Za-z0-9._-]+\.dll)") {
             $dll = $Matches[1].ToLowerInvariant()
             $deps += $dll
@@ -322,6 +337,67 @@ function Get-ValidPathDirs {
         }
     }
     return $dirs
+}
+
+function Find-BuildDirectory {
+    param(
+        [string]$RepoRoot,
+        [string]$DefaultBuildDir
+    )
+    # If BuildDir was explicitly provided and exists, use it
+    $candidate = Join-Path $RepoRoot $DefaultBuildDir
+    if (Test-Path $candidate) {
+        return $DefaultBuildDir
+    }
+    
+    # If default doesn't exist, search for build* directories in upstream/qe
+    $qeDir = Join-Path $RepoRoot "upstream\qe"
+    if (Test-Path $qeDir) {
+        $buildDirs = Get-ChildItem -Path $qeDir -Directory -Filter "build*" -ErrorAction SilentlyContinue
+        if ($buildDirs) {
+            # Prefer build-win-oneapi-msmpi if it exists (MPI build), otherwise use first match
+            $msmpiDir = $buildDirs | Where-Object { $_.Name -like "*msmpi*" } | Select-Object -First 1
+            if ($msmpiDir) {
+                $relativePath = $msmpiDir.FullName.Substring($RepoRoot.Length + 1)
+                return $relativePath -replace '\\', '/'
+            }
+            # Otherwise use first build* directory found
+            $firstDir = $buildDirs | Select-Object -First 1
+            $relativePath = $firstDir.FullName.Substring($RepoRoot.Length + 1)
+            return $relativePath -replace '\\', '/'
+        }
+    }
+    
+    # Fallback to default (even if it doesn't exist - will error later)
+    return $DefaultBuildDir
+}
+
+function Detect-MPIFromBuild {
+    param(
+        [string]$BuildDir,
+        [string]$RepoRoot
+    )
+    $buildPath = Join-Path $RepoRoot $BuildDir
+    $cmakeCache = Join-Path $buildPath "CMakeCache.txt"
+    
+    if (-not (Test-Path $cmakeCache)) {
+        return $null
+    }
+    
+    # Check for QE_ENABLE_MPI or MPI_FOUND in CMakeCache.txt
+    $mpiEnabled = Select-String -Path $cmakeCache -Pattern "^QE_ENABLE_MPI:BOOL=(ON|TRUE)" -CaseSensitive:$false
+    $mpiFound = Select-String -Path $cmakeCache -Pattern "^MPI_FOUND:BOOL=TRUE" -CaseSensitive:$false
+    
+    if ($mpiEnabled -or $mpiFound) {
+        # Check if it's MSMPI by looking for MS-MPI references
+        $msmpiRef = Select-String -Path $cmakeCache -Pattern "msmpi|MS-MPI|MSMPI" -CaseSensitive:$false
+        if ($msmpiRef) {
+            return "MSMPI"
+        }
+        return "MPI"
+    }
+    
+    return "no-MPI"
 }
 
 function Copy-DllClosure {
@@ -635,11 +711,67 @@ function Copy-MustHaveDllPatterns {
     }
 }
 
+function Stage-MSMPIRuntime {
+    param(
+        [string]$DistDir
+    )
+    
+    Write-Host "=== Staging MS-MPI Runtime ===" -ForegroundColor Cyan
+    
+    # Primary location: MS-MPI runtime install directory
+    $msmpiBin = "C:\Program Files\Microsoft MPI\Bin"
+    
+    # Files to stage
+    $filesToStage = @(
+        @{ Name = "msmpi.dll"; Required = $true; Source = $null }
+        @{ Name = "mpiexec.exe"; Required = $true; Source = $null }
+        @{ Name = "smpd.exe"; Required = $true; Source = $null }
+    )
+    
+    # Find files in primary location
+    foreach ($file in $filesToStage) {
+        $candidate = Join-Path $msmpiBin $file.Name
+        if (Test-Path $candidate) {
+            $file.Source = $candidate
+        }
+    }
+    
+    # Fallback for msmpi.dll: check System32
+    if (-not $filesToStage[0].Source) {
+        $fallback = Join-Path $env:WINDIR "System32\msmpi.dll"
+        if (Test-Path $fallback) {
+            $filesToStage[0].Source = $fallback
+        }
+    }
+    
+    # Stage each file
+    foreach ($file in $filesToStage) {
+        if ($file.Source -and (Test-Path $file.Source)) {
+            $dest = Join-Path $DistDir $file.Name
+            if ($PSCmdlet.ShouldProcess($dest, "Copy MS-MPI $($file.Name)") -and -not $WhatIfPreference) {
+                Copy-Item -Force $file.Source $dest
+            }
+            Write-Host "  + $($file.Name) (from $($file.Source))" -ForegroundColor Green
+        } else {
+            if ($file.Required) {
+                throw "Required MS-MPI file '$($file.Name)' not found. Expected at: $msmpiBin\$($file.Name) or (for msmpi.dll only) $env:WINDIR\System32\msmpi.dll"
+            } else {
+                Write-Host "  - $($file.Name) (optional, not found)" -ForegroundColor Yellow
+            }
+        }
+    }
+    
+    Write-Host "MS-MPI runtime staging complete." -ForegroundColor Green
+}
+
 function Run-SmokeTest {
     param(
         [string]$DistDir,
         [string]$ResourcesDir,
-        [switch]$Strict  # Strict mode: fail if exit code != 0 OR "JOB DONE" not detected
+        [switch]$Strict,  # Strict mode: fail if exit code != 0 OR "JOB DONE" not detected
+        [switch]$UseMpi,   # If set, run under mpiexec
+        [string]$MpiLauncher,  # Path to mpiexec.exe
+        [int]$MpiNP = 2   # Number of MPI processes
     )
     
     if (-not $DistDir) {
@@ -692,10 +824,22 @@ function Run-SmokeTest {
     $cleanPath = "$binDir;$env:PATH"
     $SMOKE_TIMEOUT_MS = 15000  # 15 seconds (calculation takes ~1s, this is abundant)
     
+    # Build command line
+    if ($UseMpi) {
+        if (-not $MpiLauncher -or -not (Test-Path $MpiLauncher)) {
+            throw "MPI launcher not found at: $MpiLauncher. Ensure mpiexec.exe is staged in dist root."
+        }
+        Write-Host "  Running under MPI: mpiexec -n $MpiNP"
+        # Use relative paths with pushd/popd in a single cmd.exe /c string
+        $cmdLine = "pushd `"$DistDir`" && `".\mpiexec.exe`" -n $MpiNP `".\pw.exe`" -in `"scf-cg.in`" > `"scf-cg.out`" 2>&1 && popd"
+        Write-Host "  MPI command: $cmdLine" -ForegroundColor Cyan
+    } else {
+        $cmdLine = "`"$pwExe`" -i scf-cg.in > scf-cg.out 2>&1"
+    }
+    
     if (-not $WhatIfPreference) {
         # Use cmd.exe to run with shell redirection (avoids deadlock issues with large output)
         # This matches the manual command: pw.exe -i scf-cg.in > scf-cg.out
-        $cmdLine = "`"$pwExe`" -i scf-cg.in > scf-cg.out 2>&1"
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = "cmd.exe"
         $psi.Arguments = "/c $cmdLine"
@@ -740,6 +884,25 @@ function Run-SmokeTest {
         # Check for "JOB DONE" in the .out file (case-insensitive)
         $jobDone = ($combined -match "JOB\s+DONE" -or $combined -match "job\s+done")
         
+        # Lightweight MPI process count verification (informational only, does not affect pass/fail)
+        if ($UseMpi -and $combined) {
+            if ($combined -match "Parallel version \(MPI\), running on") {
+                $mpiMatch = $Matches[0]
+                if ($combined -match "Parallel version \(MPI\), running on\s+(\d+)") {
+                    $foundNP = $Matches[1]
+                    if ($foundNP -eq $MpiNP) {
+                        Write-Host "  MPI process count verified: found '$MpiNP' processes" -ForegroundColor Green
+                    } else {
+                        Write-Warning "  MPI process count mismatch: expected '$MpiNP' but found '$foundNP'"
+                    }
+                } else {
+                    Write-Warning "  MPI process count line found but could not extract process count: $mpiMatch"
+                }
+            } else {
+                Write-Warning "  MPI process count line not found in output (expected 'Parallel version (MPI), running on')"
+            }
+        }
+        
         # Format exit code
         $exitCodeHex = if ($exitCode -ge 0) { "0x{0:X8}" -f $exitCode } else { "N/A" }
         
@@ -779,7 +942,11 @@ function Run-SmokeTest {
             Write-Host "Smoke test PASSED" -ForegroundColor Green
         }
     } else {
-        Write-Host "  (WhatIf: would run $pwExe -i scf-cg.in > scf-cg.out with clean PATH)"
+        if ($UseMpi) {
+            Write-Host "  (WhatIf: would run pushd `"$DistDir`" && .\mpiexec.exe -n $MpiNP .\pw.exe -in scf-cg.in > scf-cg.out 2>&1 && popd)"
+        } else {
+            Write-Host "  (WhatIf: would run $pwExe -i scf-cg.in > scf-cg.out with clean PATH)"
+        }
     }
 }
 
@@ -978,11 +1145,76 @@ K_POINTS
 }
 
 #---------------- Main ----------------#
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot  = Resolve-Path (Join-Path $ScriptDir "..")
-$BuildBin  = Resolve-Path (Join-Path $RepoRoot (Join-Path $BuildDir "bin")) -ErrorAction SilentlyContinue
-$DistRoot  = Resolve-Path (Join-Path $RepoRoot $DistDir) -ErrorAction SilentlyContinue
-if (-not $DistRoot) { $DistRoot = Join-Path $RepoRoot $DistDir }
+# Get script directory - handle both direct execution and dot-sourcing
+$scriptPath = $null
+if ($MyInvocation.MyCommand.Path) {
+    $scriptPath = $MyInvocation.MyCommand.Path
+} elseif ($PSCommandPath) {
+    $scriptPath = $PSCommandPath
+} elseif ($MyInvocation.PSCommandPath) {
+    $scriptPath = $MyInvocation.PSCommandPath
+}
+
+if (-not $scriptPath) {
+    throw "Cannot determine script path. Please run this script directly, not via dot-sourcing or other indirect methods."
+}
+if (-not (Test-Path $scriptPath)) {
+    Write-Warning "Script path determined but file does not exist: $scriptPath. Continuing anyway..."
+}
+
+$ScriptDir = Split-Path -Parent $scriptPath
+if (-not $ScriptDir) {
+    throw "Cannot determine script directory from path: $scriptPath"
+}
+
+# Build paths with null checks
+$RepoRootPath = Join-Path $ScriptDir ".."
+if (-not $RepoRootPath) {
+    throw "Cannot build RepoRoot path from ScriptDir: $ScriptDir"
+}
+$RepoRoot = Resolve-Path $RepoRootPath -ErrorAction SilentlyContinue
+if (-not $RepoRoot) { 
+    $RepoRoot = $RepoRootPath 
+}
+
+# Auto-detect build directory if using default
+$actualBuildDir = Find-BuildDirectory -RepoRoot $RepoRoot -DefaultBuildDir $BuildDir
+if ($actualBuildDir -ne $BuildDir) {
+    Write-Host "Auto-detected build directory: $actualBuildDir (was: $BuildDir)" -ForegroundColor Cyan
+    $BuildDir = $actualBuildDir
+}
+
+# Detect MPI configuration from build
+$mpiConfig = Detect-MPIFromBuild -BuildDir $BuildDir -RepoRoot $RepoRoot
+if ($mpiConfig) {
+    Write-Host "=== MPI Detection ===" -ForegroundColor Cyan
+    Write-Host "Detected: $mpiConfig" -ForegroundColor $(if ($mpiConfig -eq "no-MPI") { "Yellow" } else { "Green" })
+    Write-Host ""
+} else {
+    Write-Host "=== MPI Detection ===" -ForegroundColor Cyan
+    Write-Host "Could not detect MPI configuration (CMakeCache.txt not found or invalid)" -ForegroundColor Yellow
+    Write-Host ""
+}
+
+# Build BuildBin path
+$BuildBinPath = Join-Path $RepoRoot (Join-Path $BuildDir "bin")
+if (-not $BuildBinPath) {
+    throw "Cannot build BuildBin path from RepoRoot: $RepoRoot, BuildDir: $BuildDir"
+}
+$BuildBin = Resolve-Path $BuildBinPath -ErrorAction SilentlyContinue
+if (-not $BuildBin) {
+    $BuildBin = $BuildBinPath
+}
+
+# Build DistRoot path
+$DistRootPath = Join-Path $RepoRoot $DistDir
+if (-not $DistRootPath) {
+    throw "Cannot build DistRoot path from RepoRoot: $RepoRoot, DistDir: $DistDir"
+}
+$DistRoot = Resolve-Path $DistRootPath -ErrorAction SilentlyContinue
+if (-not $DistRoot) { 
+    $DistRoot = $DistRootPath 
+}
 
 # oneAPI root discovery
 $oneApiRoot = $env:ONEAPI_ROOT
@@ -1016,7 +1248,23 @@ if (-not (Test-Path $DistRoot) -and -not $WhatIf) {
 # Stage executables
 Write-Host "Copying executables..."
 $stagedExeFiles = Stage-Executables -BinDir $BuildBin -DistDir $DistRoot -Only $Only -WhatIf:$WhatIf
-$stagedExePaths = $stagedExeFiles | ForEach-Object { Join-Path $DistRoot $_.Name }
+if (-not $DistRoot) {
+    throw "DistRoot is null. Cannot stage executables."
+}
+# Construct paths using final staged names (not original build names)
+# For .x.exe files, they are renamed to .exe in dist, so we need to use the final name
+$stagedExePaths = $stagedExeFiles | ForEach-Object { 
+    if ($_ -and $_.Name) {
+        # If it's a .x.exe file, use the renamed .exe version in dist
+        if ($_.Name -like "*.x.exe") {
+            $finalName = $_.Name -replace '\.x\.exe$', '.exe'
+            Join-Path $DistRoot $finalName
+        } else {
+            # Regular .exe files keep their name
+            Join-Path $DistRoot $_.Name
+        }
+    }
+} | Where-Object { $_ -ne $null }
 
 # Layer 1: Recursive dumpbin dependency closure (static transitive closure)
 $dumpbinPath = Ensure-DumpbinInPath
@@ -1042,6 +1290,11 @@ if (-not $mklRoot -or -not (Test-Path $mklRoot)) {
 }
 Copy-MustHaveDllPatterns -SearchRoots $searchRoots -DistDir $DistRoot -OneApiRoot $oneApiRoot -MklRoot $mklRoot
 
+# Stage MS-MPI runtime if MSMPI is detected
+if ($mpiConfig -eq "MSMPI") {
+    Stage-MSMPIRuntime -DistDir $DistRoot
+}
+
 # Layer 3: Clean-room smoke test (final acceptance)
 Write-Host "=== Layer 3: Clean-room smoke test ===" -ForegroundColor Cyan
 # Calculate resources directory from script directory (go up 3 levels: scripts -> oneapi -> windows -> quantum_espresso)
@@ -1049,7 +1302,12 @@ $quantumEspressoRoot = Resolve-Path (Join-Path $ScriptDir "..\..\..") -ErrorActi
 $resourcesDir = Join-Path $quantumEspressoRoot "tests\resources"
 # Run smoke test in strict mode by default (require exit code 0 AND "JOB DONE")
 $strictMode = -not $NoStrict
-Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$strictMode
+if ($mpiConfig -eq "MSMPI") {
+    $mpiexecPath = Join-Path $DistRoot "mpiexec.exe"
+    Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$strictMode -UseMpi -MpiLauncher $mpiexecPath -MpiNP 2
+} else {
+    Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$strictMode
+}
 
 Write-Host ""
 Write-Host "Staging complete. Files in: $DistRoot" -ForegroundColor Green
