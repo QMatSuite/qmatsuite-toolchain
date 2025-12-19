@@ -559,6 +559,64 @@ Or download from https://github.com/ninja-build/ninja/releases and add to PATH.
 
 Then run the build script again.
 
+### Troubleshooting: VendorFFTW.lib (Windows oneAPI)
+
+#### Symptom
+
+Build fails at the final link step with:
+
+```
+LINK : fatal error LNK1181: cannot open input file 'VendorFFTW.lib'
+```
+
+This occurs even though MKL libraries (e.g., `mkl_rt.lib`, `libiomp5md.lib`) are already present in the link command.
+
+#### Root Cause
+
+`VendorFFTW.lib` is **not a real MKL library**. It is a placeholder name emitted by QE's CMake/FindVendorFFTW integration on Windows.
+
+Even when MKL libraries are already linked (providing the actual FFT functionality), the Windows linker still tries to open `VendorFFTW.lib` as a bare filename. If the file doesn't exist in the linker's search path, the build fails with `LNK1181`.
+
+#### How We Inferred the Correct Location
+
+The failing link command shows:
+
+```
+cd . && ... ifx.exe ... lib\qe_pw.lib ... VendorFFTW.lib ...
+```
+
+Key observations:
+- `lib\qe_pw.lib` is referenced as a **relative path**, implying the working directory during link is the build root (`$BuildDir`)
+- `VendorFFTW.lib` appears as a **bare filename** (no path, no `/LIBPATH:` shown)
+- The linker searches the current working directory first for bare filenames
+
+**Conclusion:** The shim must be placed at `$BuildDir\VendorFFTW.lib` (build root), not in a subdirectory like `$BuildDir\lib\VendorFFTW.lib`.
+
+#### Workaround
+
+The build script (`scripts/build_qe_win_oneapi.ps1`) automatically generates a tiny dummy static library named `VendorFFTW` (shim) when using Intel FFT backends (`Intel_FFTW3` or `Intel_DFTI`).
+
+**What the shim does:**
+- Provides an empty `VendorFFTW.lib` file that satisfies the Windows linker's file lookup
+- Does **not** provide FFT symbols (real FFT comes from MKL via `mkl_rt.lib`)
+- Only exists to prevent the linker error
+
+**Critical placement:**
+The shim is copied to the build directory root:
+```powershell
+$targetLibPath = Join-Path $BuildDir "VendorFFTW.lib"
+```
+
+This ensures the linker finds it when searching the current working directory (build root) for the bare filename `VendorFFTW.lib`.
+
+**Implementation details:**
+- The shim is built as a minimal CMake project in `$BuildDir\vendorfftw_shim\`
+- It creates a static library with a single empty function
+- After building, the generated `VendorFFTW.lib` is copied to `$BuildDir\VendorFFTW.lib`
+- This happens automatically after CMake configure and before the main build
+
+**Note:** This workaround is only applied when `-FftwVendor Intel_FFTW3` or `-FftwVendor Intel_DFTI` is used. Internal FFT (`-FftwVendor Internal`) does not require this shim.
+
 ### "LAPACK not found" or "MKL not found" in CMake
 
 **Cause:** Intel MKL was not installed or CMake cannot locate it.

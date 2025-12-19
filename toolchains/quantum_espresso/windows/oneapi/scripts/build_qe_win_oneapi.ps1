@@ -277,28 +277,66 @@ if (-not $cmakeGenerator) {
 }
 Write-Host ""
 
-# Step 6b: Validate FFT vendor and resolve paths
-Write-Host "Step 6b: Validating FFT vendor configuration..." -ForegroundColor Yellow
+# Step 6b: Resolve MKL library paths (needed for BLAS/LAPACK and VendorFFTW)
+Write-Host "Step 6b: Resolving MKL library paths..." -ForegroundColor Yellow
+
+# Resolve MKL libraries (always needed since we use external MKL for LAPACK)
+$mklRtLib = Join-Path $mklRoot "lib\mkl_rt.lib"
+if (-not (Test-Path $mklRtLib)) {
+    Write-Host ""
+    Write-Host "ERROR: MKL library not found!" -ForegroundColor Red
+    Write-Host "  Missing: $mklRtLib" -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
+
+# Resolve libiomp5md.lib
+$libiomp5mdPath = $null
+$latestCompilerPath = Join-Path $oneApiRoot "compiler\latest\lib\libiomp5md.lib"
+if (Test-Path $latestCompilerPath) {
+    $libiomp5mdPath = $latestCompilerPath
+} else {
+    # Search for all compiler versions and pick the newest
+    $compilerVersions = Get-ChildItem "$oneApiRoot\compiler" -Directory -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -match '^\d+\.\d+$' } |
+        Sort-Object { [Version]$_.Name } -Descending
+    
+    foreach ($version in $compilerVersions) {
+        $candidate = Join-Path $version.FullName "lib\libiomp5md.lib"
+        if (Test-Path $candidate) {
+            $libiomp5mdPath = $candidate
+            break
+        }
+    }
+}
+
+if (-not $libiomp5mdPath) {
+    Write-Host ""
+    Write-Host "ERROR: libiomp5md.lib not found!" -ForegroundColor Red
+    Write-Host "  Searched in: $oneApiRoot\compiler\*\lib\libiomp5md.lib" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "MKL threading typically requires libiomp5md.lib." -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+
+# Set BLAS/LAPACK libraries to full absolute paths (needed for FindVendorFFTW)
+$blasLapackLibraries = "$mklRtLib;$libiomp5mdPath"
+Write-Host "  BLAS/LAPACK libraries: $blasLapackLibraries" -ForegroundColor Green
+Write-Host "  mkl_rt.lib: $mklRtLib" -ForegroundColor Green
+Write-Host "  libiomp5md.lib: $libiomp5mdPath" -ForegroundColor Green
+Write-Host ""
+
+# Step 6c: Validate FFT vendor and resolve paths
+Write-Host "Step 6c: Validating FFT vendor configuration..." -ForegroundColor Yellow
 Write-Host "  FFT vendor: $FftwVendor" -ForegroundColor Cyan
 
 $fftVendorIncludeDirs = $null
 $fftVendorLibraries = $null
-$libiomp5mdPath = $null
 
 if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
     # Validate required paths for both Intel_FFTW3 and Intel_DFTI
-    $mklRtLib = Join-Path $mklRoot "lib\mkl_rt.lib"
     $fftw3Header = Join-Path $mklRoot "include\fftw\fftw3.h"
-    
-    if (-not (Test-Path $mklRtLib)) {
-        Write-Host ""
-        Write-Host "ERROR: $FftwVendor selected but required library not found!" -ForegroundColor Red
-        Write-Host "  Missing: $mklRtLib" -ForegroundColor Red
-        Write-Host ""
-        Write-Host "Either install MKL FFTW headers/libs or rerun with -FftwVendor Internal" -ForegroundColor Yellow
-        Write-Host ""
-        exit 1
-    }
     
     if (-not (Test-Path $fftw3Header)) {
         Write-Host ""
@@ -310,43 +348,12 @@ if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
         exit 1
     }
     
-    # Resolve libiomp5md.lib
-    $latestCompilerPath = Join-Path $oneApiRoot "compiler\latest\lib\libiomp5md.lib"
-    if (Test-Path $latestCompilerPath) {
-        $libiomp5mdPath = $latestCompilerPath
-    } else {
-        # Search for all compiler versions and pick the newest
-        $compilerVersions = Get-ChildItem "$oneApiRoot\compiler" -Directory -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Name -match '^\d+\.\d+$' } |
-            Sort-Object { [Version]$_.Name } -Descending
-        
-        foreach ($version in $compilerVersions) {
-            $candidate = Join-Path $version.FullName "lib\libiomp5md.lib"
-            if (Test-Path $candidate) {
-                $libiomp5mdPath = $candidate
-                break
-            }
-        }
-    }
-    
-    if (-not $libiomp5mdPath) {
-        Write-Host ""
-        Write-Host "ERROR: $FftwVendor selected but libiomp5md.lib not found!" -ForegroundColor Red
-        Write-Host "  Searched in: $oneApiRoot\compiler\*\lib\libiomp5md.lib" -ForegroundColor Red
-        Write-Host ""
-        Write-Host "MKL threading typically requires libiomp5md.lib. Either install it or rerun with -FftwVendor Internal" -ForegroundColor Yellow
-        Write-Host ""
-        exit 1
-    }
-    
     # Set paths for CMake (same for both Intel_FFTW3 and Intel_DFTI)
     $fftVendorIncludeDirs = Join-Path $mklRoot "include\fftw"
     $fftVendorLibraries = "$mklRtLib;$libiomp5mdPath"
     
     Write-Host "  VendorFFTW_INCLUDE_DIRS: $fftVendorIncludeDirs" -ForegroundColor Green
     Write-Host "  VendorFFTW_LIBRARIES: $fftVendorLibraries" -ForegroundColor Green
-    Write-Host "  mkl_rt.lib: $mklRtLib" -ForegroundColor Green
-    Write-Host "  libiomp5md.lib: $libiomp5mdPath" -ForegroundColor Green
 } elseif ($FftwVendor -eq "Internal") {
     Write-Host "  Using QE internal FFT implementation" -ForegroundColor Green
 } elseif ($FftwVendor -eq "AUTO") {
@@ -413,7 +420,16 @@ $cmakeConfigure = @(
     "-DQE_FFTW_VENDOR=$FftwVendor"     # FFT vendor (user-selected)
 )
 
+# Force BLAS_LIBRARIES and LAPACK_LIBRARIES to full absolute paths
+# This ensures FindVendorFFTW can build VendorFFTW_LIBRARIES from them correctly
+$cmakeConfigure += "-DBLAS_LIBRARIES=`"$blasLapackLibraries`""
+$cmakeConfigure += "-DLAPACK_LIBRARIES=`"$blasLapackLibraries`""
+
 # Add VendorFFTW hints for both Intel_FFTW3 and Intel_DFTI
+# Note: FindVendorFFTW module builds VendorFFTW_LIBRARIES from BLAS_LIBRARIES and LAPACK_LIBRARIES
+# when it finds MKL in the search paths. However, we set VendorFFTW_LIBRARIES as required
+# by the user specification. The module may override this, but setting it ensures the
+# variables are available if the module needs them.
 if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
     $cmakeConfigure += "-DVendorFFTW_ID=Intel"
     $cmakeConfigure += "-DVendorFFTW_INCLUDE_DIRS=`"$fftVendorIncludeDirs`""
@@ -502,8 +518,10 @@ try {
     $configureCmd = "$vsInitPrefix && $oneApiInit && $cmakeConfigure"
     $buildCmd = "$vsInitPrefix && $oneApiInit && $cmakeBuild"
     
-    # Log FFT vendor configuration before running CMake
-    Write-Host "=== FFT Vendor Configuration ===" -ForegroundColor Cyan
+    # Log library configuration before running CMake
+    Write-Host "=== Library Configuration ===" -ForegroundColor Cyan
+    Write-Host "BLAS_LIBRARIES: $blasLapackLibraries" -ForegroundColor White
+    Write-Host "LAPACK_LIBRARIES: $blasLapackLibraries" -ForegroundColor White
     Write-Host "FFTW vendor: $FftwVendor" -ForegroundColor White
     if ($fftVendorIncludeDirs) {
         Write-Host "VendorFFTW_INCLUDE_DIRS: $fftVendorIncludeDirs" -ForegroundColor White
@@ -528,7 +546,114 @@ try {
         exit $configureExit
     }
     
+    # Validate resolved library paths from CMakeCache.txt
     Write-Host ""
+    Write-Host "=== Validating CMake Cache Variables ===" -ForegroundColor Cyan
+    $cmakeCacheFile = Join-Path $BuildDir "CMakeCache.txt"
+    if (Test-Path $cmakeCacheFile) {
+        # Extract BLAS_LIBRARIES
+        $blasLine = Select-String -Path $cmakeCacheFile -Pattern '^BLAS_LIBRARIES:STRING=' | Select-Object -First 1
+        if ($blasLine) {
+            $blasValue = $blasLine.Line -replace '^BLAS_LIBRARIES:STRING=', ''
+            Write-Host "BLAS_LIBRARIES: $blasValue" -ForegroundColor White
+        } else {
+            Write-Host "BLAS_LIBRARIES: (not found in cache)" -ForegroundColor Yellow
+        }
+        
+        # Extract LAPACK_LIBRARIES
+        $lapackLine = Select-String -Path $cmakeCacheFile -Pattern '^LAPACK_LIBRARIES:STRING=' | Select-Object -First 1
+        if ($lapackLine) {
+            $lapackValue = $lapackLine.Line -replace '^LAPACK_LIBRARIES:STRING=', ''
+            Write-Host "LAPACK_LIBRARIES: $lapackValue" -ForegroundColor White
+        } else {
+            Write-Host "LAPACK_LIBRARIES: (not found in cache)" -ForegroundColor Yellow
+        }
+        
+        # Extract VendorFFTW_LIBRARIES
+        $vendorLine = Select-String -Path $cmakeCacheFile -Pattern '^VendorFFTW_LIBRARIES:STRING=' | Select-Object -First 1
+        if ($vendorLine) {
+            $vendorValue = $vendorLine.Line -replace '^VendorFFTW_LIBRARIES:STRING=', ''
+            Write-Host "VendorFFTW_LIBRARIES: $vendorValue" -ForegroundColor White
+        } else {
+            Write-Host "VendorFFTW_LIBRARIES: (not found in cache)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  Warning: CMakeCache.txt not found at $cmakeCacheFile" -ForegroundColor Yellow
+    }
+    Write-Host ""
+    
+    # Workaround: Generate VendorFFTW.lib shim to avoid LNK1181
+    # This is needed because the link line contains VendorFFTW.lib (not a full path),
+    # even though MKL libraries are already in the link line.
+    if ($FftwVendor -eq "Intel_FFTW3" -or $FftwVendor -eq "Intel_DFTI") {
+        Write-Host "=== Creating VendorFFTW shim library ===" -ForegroundColor Cyan
+        $shimSrcDir = Join-Path $BuildDir "vendorfftw_shim"
+        $shimBuildDir = Join-Path $shimSrcDir "build"
+        $targetLibPath = Join-Path $BuildDir "VendorFFTW.lib"
+        
+        Write-Host "Creating VendorFFTW shim lib at: $targetLibPath" -ForegroundColor Yellow
+        
+        # Create shim source directory
+        New-Item -ItemType Directory -Force -Path $shimSrcDir | Out-Null
+        New-Item -ItemType Directory -Force -Path $shimBuildDir | Out-Null
+        
+        # Create CMakeLists.txt for shim
+        $shimCMakeLists = @"
+cmake_minimum_required(VERSION 3.15)
+project(VendorFFTWShim C)
+
+file(WRITE "`${CMAKE_BINARY_DIR}/vendorfftw_dummy.c" "void vendorfftw_dummy(void){}")
+
+add_library(VendorFFTW STATIC "`${CMAKE_BINARY_DIR}/vendorfftw_dummy.c")
+
+set_target_properties(VendorFFTW PROPERTIES OUTPUT_NAME "VendorFFTW")
+"@
+        $shimCMakeListsPath = Join-Path $shimSrcDir "CMakeLists.txt"
+        Set-Content -Path $shimCMakeListsPath -Value $shimCMakeLists -Encoding UTF8
+        
+        # Configure shim project
+        $shimConfigureCmd = "$vsInitPrefix && $oneApiInit && `"$cmakePath`" -S `"$shimSrcDir`" -B `"$shimBuildDir`" -G `"$cmakeGenerator`" -DCMAKE_BUILD_TYPE=Release"
+        Write-Host "  Configuring VendorFFTW shim..." -ForegroundColor Gray
+        & cmd.exe /c $shimConfigureCmd
+        $shimConfigureExit = $LASTEXITCODE
+        if ($shimConfigureExit -ne 0) {
+            throw "Failed to configure VendorFFTW shim (exit code $shimConfigureExit)"
+        }
+        
+        # Build shim project
+        $shimBuildCmd = "$vsInitPrefix && $oneApiInit && `"$cmakePath`" --build `"$shimBuildDir`" --config Release"
+        Write-Host "  Building VendorFFTW shim..." -ForegroundColor Gray
+        & cmd.exe /c $shimBuildCmd
+        $shimBuildExit = $LASTEXITCODE
+        if ($shimBuildExit -ne 0) {
+            throw "Failed to build VendorFFTW shim (exit code $shimBuildExit)"
+        }
+        
+        # Find the generated VendorFFTW.lib
+        $foundLibs = Get-ChildItem -Path $shimBuildDir -Recurse -Filter "VendorFFTW.lib" -ErrorAction SilentlyContinue
+        if ($foundLibs.Count -eq 0) {
+            throw "VendorFFTW.lib not found in shim build directory: $shimBuildDir"
+        }
+        $sourceLibPath = $foundLibs[0].FullName
+        Write-Host "  Found shim library at: $sourceLibPath" -ForegroundColor Green
+        
+        # Ensure target lib directory exists
+        $targetLibDir = Split-Path -Parent $targetLibPath
+        New-Item -ItemType Directory -Force -Path $targetLibDir | Out-Null
+        
+        # Copy to target location
+        Copy-Item -Path $sourceLibPath -Destination $targetLibPath -Force
+        Write-Host "  Copied to: $targetLibPath" -ForegroundColor Green
+        
+        # Verify the file exists
+        if (-not (Test-Path $targetLibPath)) {
+            throw "Failed to create VendorFFTW.lib at $targetLibPath. Shim build output: $shimBuildDir"
+        }
+        
+        Write-Host "  VendorFFTW shim library created successfully" -ForegroundColor Green
+        Write-Host ""
+    }
+    
     Write-Host "=== CMake Build (verbose) ===" -ForegroundColor Yellow
     & cmd.exe /c $buildCmd
     $exitCode = $LASTEXITCODE
