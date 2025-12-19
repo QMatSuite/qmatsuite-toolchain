@@ -604,19 +604,12 @@ if ($mpiFlag -eq "ON") {
     # Build Fortran library list: msmpifec.lib;msmpifmc.lib;msmpi.lib (order matters)
     $msMpiFortranLibs = "$msMpiLibFec;$msMpiLibFmc;$msMpiLib"
     
-    # Log MS-MPI library configuration
-    Write-Host "=== MS-MPI Library Configuration ===" -ForegroundColor Cyan
+    # Log MS-MPI library configuration before CMake configure
+    Write-Host "=== MS-MPI Library Configuration (before CMake configure) ===" -ForegroundColor Cyan
     Write-Host "  Library directory: $msmpiLibDir" -ForegroundColor White
-    Write-Host "  Resolved library paths:" -ForegroundColor White
-    Write-Host "    msmpi.lib: $msmpiLib" -ForegroundColor Gray
-    Write-Host "    msmpifec.lib: $msmpifecLib" -ForegroundColor Gray
-    Write-Host "    msmpifmc.lib: $msmpifmcLib" -ForegroundColor Gray
-    Write-Host "  CMake paths (forward slashes):" -ForegroundColor White
-    Write-Host "    msmpi.lib: $msMpiLib" -ForegroundColor Gray
-    Write-Host "    msmpifec.lib: $msMpiLibFec" -ForegroundColor Gray
-    Write-Host "    msmpifmc.lib: $msMpiLibFmc" -ForegroundColor Gray
-    Write-Host "  MPI_C_LIBRARIES: $msMpiLib" -ForegroundColor White
-    Write-Host "  MPI_Fortran_LIBRARIES: $msMpiFortranLibs" -ForegroundColor White
+    Write-Host "  Final resolved values passed to CMake:" -ForegroundColor White
+    Write-Host "    MPI_C_LIBRARIES: $msMpiLib" -ForegroundColor Yellow
+    Write-Host "    MPI_Fortran_LIBRARIES: $msMpiFortranLibs" -ForegroundColor Yellow
     Write-Host ""
     
     # Force FindMPI to use MSMPI and skip compiler wrappers
@@ -739,7 +732,14 @@ try {
     
     Write-Host "=== CMake Configuration ===" -ForegroundColor Yellow
     # Capture configure output to verify MS-MPI shim was used
-    $configureOutput = & cmd.exe /c $configureCmd 2>&1 | Out-String
+    # Use try-catch to suppress PowerShell's false error interpretation of cmd.exe output
+    try {
+        $configureOutput = & cmd.exe /c $configureCmd 2>&1 | Out-String
+    } catch {
+        # PowerShell may interpret some cmd.exe output as errors, but configure still succeeds
+        # Re-run without error handling to get actual output
+        $configureOutput = cmd.exe /c $configureCmd 2>&1 | Out-String
+    }
     Write-Host $configureOutput
     $configureExit = $LASTEXITCODE
     if ($configureExit -ne 0) {
