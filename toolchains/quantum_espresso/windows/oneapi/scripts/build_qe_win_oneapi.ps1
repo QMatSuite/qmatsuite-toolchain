@@ -399,7 +399,8 @@ $cmakeConfigure = @(
     "-DCMAKE_BUILD_TYPE=Release",      # Build type
     "-DCMAKE_Fortran_COMPILER=`"$ifxPath`"",    # Intel Fortran compiler (full path)
     "-DCMAKE_C_COMPILER=`"$icxPath`"",          # Intel C compiler (full path)
-    "-DCMAKE_Fortran_FLAGS_RELEASE=`"-heap-arrays`"",  # Use heap arrays for Release (fix stack overflow)
+    "-DCMAKE_Fortran_FLAGS_RELEASE=`"-O2 -DNDEBUG -heap-arrays`"",  # Release: -O2 optimization, heap arrays for stack overflow fix
+    "-DCMAKE_C_FLAGS_RELEASE=`"-O2 -DNDEBUG`"",  # Release: -O2 optimization for C code
     "-DCMAKE_Fortran_FLAGS_DEBUG=`"-heap-arrays -traceback`"",  # Use heap arrays + traceback for Debug
     "-DCMAKE_EXE_LINKER_FLAGS=`"-Qoption,link,/STACK:134217728`"",  # Increase stack size to 128MB (fix stack overflow) - use Intel pass-through to avoid ifx warning
     "-DCMAKE_SHARED_LINKER_FLAGS=`"-Qoption,link,/STACK:134217728`"",  # Also apply to shared modules
@@ -576,6 +577,24 @@ try {
             Write-Host "VendorFFTW_LIBRARIES: $vendorValue" -ForegroundColor White
         } else {
             Write-Host "VendorFFTW_LIBRARIES: (not found in cache)" -ForegroundColor Yellow
+        }
+        
+        # Extract CMAKE_Fortran_FLAGS_RELEASE
+        $fortranFlagsLine = Select-String -Path $cmakeCacheFile -Pattern '^CMAKE_Fortran_FLAGS_RELEASE:STRING=' | Select-Object -First 1
+        if ($fortranFlagsLine) {
+            $fortranFlagsValue = $fortranFlagsLine.Line -replace '^CMAKE_Fortran_FLAGS_RELEASE:STRING=', ''
+            Write-Host "CMAKE_Fortran_FLAGS_RELEASE: $fortranFlagsValue" -ForegroundColor White
+        } else {
+            Write-Host "CMAKE_Fortran_FLAGS_RELEASE: (not found in cache)" -ForegroundColor Yellow
+        }
+        
+        # Extract CMAKE_C_FLAGS_RELEASE
+        $cFlagsLine = Select-String -Path $cmakeCacheFile -Pattern '^CMAKE_C_FLAGS_RELEASE:STRING=' | Select-Object -First 1
+        if ($cFlagsLine) {
+            $cFlagsValue = $cFlagsLine.Line -replace '^CMAKE_C_FLAGS_RELEASE:STRING=', ''
+            Write-Host "CMAKE_C_FLAGS_RELEASE: $cFlagsValue" -ForegroundColor White
+        } else {
+            Write-Host "CMAKE_C_FLAGS_RELEASE: (not found in cache)" -ForegroundColor Yellow
         }
     } else {
         Write-Host "  Warning: CMakeCache.txt not found at $cmakeCacheFile" -ForegroundColor Yellow

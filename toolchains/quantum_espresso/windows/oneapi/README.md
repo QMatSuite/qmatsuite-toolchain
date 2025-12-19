@@ -694,11 +694,18 @@ pw.exe             00007FF7CEF20D07  Unknown               Unknown  Unknown
 The build script (`scripts/build_qe_win_oneapi.ps1`) sets:
 
 ```cmake
--DCMAKE_Fortran_FLAGS_RELEASE="-heap-arrays"
+-DCMAKE_Fortran_FLAGS_RELEASE="-O2 -DNDEBUG -fp-model=precise -qno-multibyte-chars -assume nostd_intent_in -heap-arrays"
+-DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG"
 -DCMAKE_Fortran_FLAGS_DEBUG="-heap-arrays -traceback"
 ```
 
-**Why this works:** Instead of allocating large arrays on the limited stack, the compiler allocates them on the heap, which has much more available space. This is the primary and required fix.
+**Optimization flags:**
+- **Release uses `-O2`** for high-performance optimization (conservative but effective)
+- **`-fp-model=precise`** ensures numerical stability (not fast-math) - critical for scientific computing accuracy
+- **`-heap-arrays`** is kept to avoid stack issues on Windows (required fix)
+- **C code** also uses `-O2 -DNDEBUG` for consistent optimization level
+
+**Why `-heap-arrays` works:** Instead of allocating large arrays on the limited stack, the compiler allocates them on the heap, which has much more available space. This is the primary and required fix.
 
 #### Optional hardening: 128 MB stack reserve
 
@@ -743,12 +750,13 @@ This indicates 128 MB (0x8000000 hex = 134217728 bytes = 128 MB).
 **Confirm CMakeCache contains the correct flags:**
 
 ```powershell
-Select-String -Path build-win-oneapi\CMakeCache.txt -Pattern "CMAKE_Fortran_FLAGS_RELEASE:STRING=|CMAKE_EXE_LINKER_FLAGS:STRING="
+Select-String -Path build-win-oneapi\CMakeCache.txt -Pattern "CMAKE_Fortran_FLAGS_RELEASE:STRING=|CMAKE_C_FLAGS_RELEASE:STRING=|CMAKE_EXE_LINKER_FLAGS:STRING="
 ```
 
 **Expected:**
 ```
-CMAKE_Fortran_FLAGS_RELEASE:STRING=-heap-arrays
+CMAKE_Fortran_FLAGS_RELEASE:STRING=-O2 -DNDEBUG -fp-model=precise -qno-multibyte-chars -assume nostd_intent_in -heap-arrays
+CMAKE_C_FLAGS_RELEASE:STRING=-O2 -DNDEBUG
 CMAKE_EXE_LINKER_FLAGS:STRING=-Qoption,link,/STACK:134217728
 ```
 
