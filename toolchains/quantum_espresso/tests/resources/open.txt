@@ -1,0 +1,51 @@
+--- Process 21888 created
+--- Process 21888 loaded C:\Windows\System32\ntdll.dll at 00007ffa4a9e0000
+--- Process 21888 loaded C:\Windows\System32\kernel32.dll at 00007ffa4a750000
+--- Process 21888 loaded C:\Windows\System32\KernelBase.dll at 00007ffa48380000
+--- Process 21888 thread 21468 created
+--- Process 21888 thread 30268 created
+--- Process 21888 loaded C:\Windows\System32\ucrtbase.dll at 00007ffa47c60000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libgcc_s_seh-1.dll at 00007ffa37410000
+--- Process 21888 thread 35744 created
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libgfortran-5.dll at 00007ff9d04c0000
+--- Process 21888 loaded C:\Windows\System32\advapi32.dll at 00007ffa48b20000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libfftw3-3.dll at 00007ff9c84f0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libfftw3_omp-3.dll at 00007ffa44880000
+--- Process 21888 loaded C:\Windows\System32\msvcrt.dll at 00007ffa48950000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libhdf5_fortran-320.dll at 00007ffa34570000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libmbd.dll at 00007ffa34410000
+--- Process 21888 loaded C:\Windows\System32\sechost.dll at 00007ffa49ef0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libgomp-1.dll at 00007ffa345c0000
+--- Process 21888 loaded C:\Windows\System32\rpcrt4.dll at 00007ffa494f0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libwinpthread-1.dll at 00007ffa373d0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libopenblas.dll at 00007ff953d20000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libhdf5_f90cstub-320.dll at 00007ffa373b0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libquadmath-0.dll at 00007ffa222a0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libhdf5-320.dll at 00007ff9a5080000
+--- Process 21888 loaded C:\Windows\System32\shlwapi.dll at 00007ffa49480000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-auth.dll at 00007ffa09b70000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-common.dll at 00007ffa09a40000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-http.dll at 00007ffa06830000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-io.dll at 00007ffa06ae0000
+--- Process 21888 loaded C:\Windows\System32\crypt32.dll at 00007ffa48060000
+--- Process 21888 loaded C:\Windows\System32\psapi.dll at 00007ffa48a00000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-s3.dll at 00007ffa067d0000
+--- Process 21888 loaded C:\Windows\System32\ws2_32.dll at 00007ffa48aa0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libsz-2.dll at 00007ffa372b0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\zlib1.dll at 00007ffa358a0000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-sdkutils.dll at 00007ffa37350000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-cal.dll at 00007ffa35830000
+--- Process 21888 loaded C:\Windows\System32\bcrypt.dll at 00007ffa47a20000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-c-compression.dll at 00007ffa422b0000
+--- Process 21888 loaded C:\Windows\System32\ncrypt.dll at 00007ffa47330000
+--- Process 21888 loaded C:\Windows\System32\secur32.dll at 00007ffa44c10000
+--- Process 21888 loaded C:\msys64\ucrt64\bin\libaws-checksums.dll at 00007ffa35810000
+--- Process 21888 loaded C:\Windows\System32\sspicli.dll at 00007ffa46b40000
+--- Process 21888 loaded C:\Windows\System32\cryptbase.dll at 00007ffa47040000
+--- Process 21888 loaded C:\Windows\System32\bcryptprimitives.dll at 00007ffa47fb0000
+--- Process 21888 loaded C:\Windows\System32\ntasn1.dll at 00007ffa472e0000
+--- Process 21888, exception c00000fd at 00007ff729deec56
+--- Process 21888 thread 21468 exited with status 0xc00000fd
+--- Process 21888 thread 30268 exited with status 0xc00000fd
+--- Process 21888 thread 36032 exited with status 0xc00000fd
+--- Process 21888 exited with status 0xc00000fd

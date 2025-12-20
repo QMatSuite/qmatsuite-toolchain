@@ -1,0 +1,53 @@
+At line 1081 of file xmltools.f90
+Fortran runtime error: Read past ENDFILE record
+
+Error termination. Backtrace:
+#0  0xcf2b5c23 in ???
+#1  0xcf231011 in ???
+#2  0xcf0ecafb in ???
+#3  0xcf2326fd in ???
+#4  0xcf2b33f1 in ???
+#5  0xcf2b2dc9 in ???
+#6  0xcf2d05ac in ???
+#7  0xcf2cfda3 in ???
+#8  0xcf21d6e2 in ???
+#9  0xe80c0c67 in ???
+#10  0xe8092b1a in ???
+#11  0xe8093ff6 in ???
+#12  0xe807eea7 in ???
+#13  0xe7c9d889 in ???
+#14  0xe7791784 in ???
+#15  0xe7799321 in ???
+#16  0xe786bb1f in ???
+#17  0xe7701614 in ???
+#18  0xe77016ba in ???
+#19  0xe77010c8 in __tmainCRTStartup
+	at D:/W/B/src/mingw-w64/mingw-w64-crt/crt/crtexe.c:246
+#20  0xe7701435 in mainCRTStartup
+	at D:/W/B/src/mingw-w64/mingw-w64-crt/crt/crtexe.c:123
+#21  0x4a77e8d6 in ???
+#22  0x4aa6c53b in ???
+#23  0xffffffff in ???
+
+     Program PWSCF v.7.5 starts on 20Dec2025 at  4:14:16 
+
+     This program is part of the open-source Quantum ESPRESSO suite
+     for quantum simulation of materials; please cite
+         "P. Giannozzi et al., J. Phys.:Condens. Matter 21 395502 (2009);
+         "P. Giannozzi et al., J. Phys.:Condens. Matter 29 465901 (2017);
+         "P. Giannozzi et al., J. Chem. Phys. 152 154105 (2020);
+          URL http://www.quantum-espresso.org", 
+     in publications or presentations arising from this work. More details at
+     http://www.quantum-espresso.org/quote
+
+     Serial multi-threaded version, running on    1 processor cores
+     0 MiB available memory on the printing compute node when the environment starts
+
+     Reading input from si100.in
+
+     Current dimensions of program PWSCF are:
+     Max number of different atomic species (ntypx) = 10
+     Max number of k-points (npk) =  40000
+     Max angular momentum in pseudopotentials (lmaxx) =  4
+ end of file reached, tag  not found
+ end of file reached, tag not found

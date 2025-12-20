@@ -1,0 +1,20 @@
+$foldername = "win-oneapi_1_serial_internalFFTW"
+$foldername = "win-oneapi_2_serial_MKLFFT"
+$foldername = "win-oneapi_5_MSMPI_OMP_O2_MKLFFT"
+$foldername = "win-oneapi_4_OMP_O2_MKLFFT"
+$foldername = "win-oneapi_6_MSMPI_OMP_O2_MKLFFT"
+
+$env:KMP_SETTINGS = "1"
+$env:OMP_DISPLAY_ENV = "TRUE"
+
+$distDir = "..\..\windows\oneapi\dist\$foldername"
+$env:PATH = "$distDir;$env:PATH"
+
+pw.exe -in si100.in > "si100_$foldername.out" 2>&1
+
+mpiexec.exe -n 4 pw.exe -in si100.in > "si100_$foldername.out" 2>&1
+
+mpiexec.exe -n 4 pw.exe -in si100.in > si100_qe6.4.1_MSMPI.out 2>&1
+
+$env:OMP_NUM_THREADS = "1"
+$env:MKL_NUM_THREADS = "8"

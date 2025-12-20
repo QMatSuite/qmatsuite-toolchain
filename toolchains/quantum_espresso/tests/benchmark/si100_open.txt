@@ -1,0 +1,25 @@
+--- Process 36748 created
+--- Process 36748 loaded C:\Windows\System32\ntdll.dll at 00007ffa4a9e0000
+--- Process 36748 loaded C:\Windows\System32\kernel32.dll at 00007ffa4a750000
+--- Process 36748 loaded C:\Windows\System32\KernelBase.dll at 00007ffa48380000
+--- Process 36748 thread 34756 created
+--- Process 36748 loaded C:\Windows\System32\ucrtbase.dll at 00007ffa47c60000
+--- Process 36748 thread 4732 created
+--- Process 36748 thread 29008 created
+--- Process 36748 loaded C:\msys64\ucrt64\bin\libgcc_s_seh-1.dll at 00007ffa2e380000
+--- Process 36748 loaded C:\msys64\ucrt64\bin\libgomp-1.dll at 00007ff9d7210000
+--- Process 36748 loaded C:\msys64\ucrt64\bin\libgfortran-5.dll at 00007ff9cf0b0000
+--- Process 36748 loaded C:\msys64\ucrt64\bin\libwinpthread-1.dll at 00007ffa372b0000
+--- Process 36748 loaded C:\msys64\ucrt64\bin\libopenblas.dll at 00007ff9511e0000
+--- Process 36748 loaded C:\Windows\System32\advapi32.dll at 00007ffa48b20000
+--- Process 36748 loaded C:\Windows\System32\msvcrt.dll at 00007ffa48950000
+--- Process 36748 loaded C:\msys64\ucrt64\bin\libquadmath-0.dll at 00007ff9d6900000
+--- Process 36748 loaded C:\Windows\System32\sechost.dll at 00007ffa49ef0000
+--- Process 36748 loaded C:\Windows\System32\rpcrt4.dll at 00007ffa494f0000
+--- Process 36748 loaded C:\Windows\System32\cryptbase.dll at 00007ffa47040000
+--- Process 36748 loaded C:\Windows\System32\bcryptprimitives.dll at 00007ffa47fb0000
+--- Process 36748 loaded C:\Windows\System32\kernel.appcore.dll at 00007ffa46840000
+--- Process 36748 thread 4732 exited with status 0x2
+--- Process 36748 thread 34756 exited with status 0x2
+--- Process 36748 thread 29008 exited with status 0x2
+--- Process 36748 exited with status 0x2
