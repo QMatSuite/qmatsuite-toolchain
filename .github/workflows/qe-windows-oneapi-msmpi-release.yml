@@ -310,7 +310,7 @@ jobs:
           enable-AzPSSession: false
 
       - name: Sign all executables with Trusted Signing
-        uses: Azure/trusted-signing-action@v1
+        uses: Azure/trusted-signing-action@v0
         with:
           endpoint: ${{ secrets.TRUSTEDSIGN_ENDPOINT }}
           account: ${{ secrets.TRUSTEDSIGN_ACCOUNT }}

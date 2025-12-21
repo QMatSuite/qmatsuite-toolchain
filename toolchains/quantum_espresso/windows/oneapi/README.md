@@ -71,20 +71,50 @@ This repository uses a vendor/submodule approach:
 
 ## CI/CD: Automated Build and Staging
 
-The GitHub Actions workflow (`.github/workflows/qe-windows-oneapi-mkl.yml`) automates the complete build and staging pipeline:
+### Standard CI Workflow
+
+The GitHub Actions workflow (`.github/workflows/qe-windows-oneapi-msmpi.yml`) automates the complete build and staging pipeline:
 
 1. **Installs oneAPI** (with caching for performance)
-2. **Builds QE** using the oneAPI toolchain
-3. **Stages the distribution** using `stage_qe_windows.ps1` with `-Strict` mode
-4. **Uploads the staged distribution** as a GitHub Actions artifact (`qe-windows-oneapi-dist`)
+2. **Builds QE** using the oneAPI toolchain (default: `pw` only)
+3. **Stages the distribution** using `stage_qe_windows.ps1` with strict mode
+4. **Uploads the staged distribution** as a GitHub Actions artifact (`qe-windows-oneapi-msmpi-dist`)
 
 The staged artifact contains:
 - All QE executables (`.exe` files)
-- Required runtime DLLs (Intel Fortran, OpenMP, MKL, MSVC runtime)
+- Required runtime DLLs (Intel Fortran, OpenMP, MKL, MSVC runtime, MS-MPI)
 - Test resources (`scf-cg.in`, `Si.pz-vbc.UPF`)
 - Dependency closure log (`deps-closure.txt`)
 
 The artifact is retained for 7 days and can be downloaded from the workflow run page.
+
+### Release Workflow (Signed & Attested)
+
+A separate release workflow (`.github/workflows/qe-windows-oneapi-msmpi-release.yml`) provides signed, attested releases:
+
+**Features:**
+- **Manual trigger only** (`workflow_dispatch`) - runs only when explicitly triggered
+- **Two-stage pipeline:**
+  - **Job A (build_stage)**: Builds and stages QE, uploads as artifact (cachable)
+  - **Job B (sign_package_attest_release)**: Signs, packages, attests, and creates release (fast reruns, no recompilation)
+- **Build modes:**
+  - `pw`: Build only `pw.x` executable (default for standard CI)
+  - `all`: Build all QE executables (default for release workflow)
+- **Microsoft Trusted Signing**: All executables are signed with Azure Trusted Signing
+- **GitHub Artifact Attestation**: Build provenance is attested for the distribution zip
+- **GitHub Release**: Creates a release in this repository with signed zip and SHA256 checksum
+
+**Workflow inputs:**
+- `build_mode`: `pw` or `all` (default: `all`)
+- `clean_compile`: Force clean build, skip cache (default: `false`)
+- `release_tag`: Custom release tag/name (optional; auto-generated if empty)
+- `release_draft`: Create as draft release (default: `true`)
+
+**Required secrets** (set in repository settings):
+- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+- `TRUSTEDSIGN_ENDPOINT`, `TRUSTEDSIGN_ACCOUNT`, `TRUSTEDSIGN_CERT_PROFILE`
+
+**Usage:** Trigger manually from GitHub Actions UI. Job B can be re-run independently for debugging signing/release issues without recompiling.
 
 ## CI/CD Installation: oneAPI with MKL on Windows
 
@@ -190,7 +220,7 @@ Start-Process -FilePath $bootstrapper -ArgumentList "--silent", "--eula", "accep
 - The `p="..."` parameter disables Visual Studio integration prompts (not needed in CI)
 - The bootstrapper approach is the only reliable method for automated Windows CI installation
 
-**Reference implementation:** See `.github/workflows/qe-windows-oneapi-mkl.yml` in this repository for a complete GitHub Actions workflow that implements this installation method with caching, builds QE, stages the distribution, and uploads it as an artifact.
+**Reference implementation:** See `.github/workflows/qe-windows-oneapi-msmpi.yml` in this repository for a complete GitHub Actions workflow that implements this installation method with caching, builds QE, stages the distribution, and uploads it as an artifact.
 
 ### Caching for CI Performance
 
@@ -278,6 +308,7 @@ Notes:
 Options:
 - Serial build: `-NoMpi`
 - Custom source dir: `-QeSourceDir "path/to/qe"`
+- Build target: `-MakeTarget pw` (default, builds only `pw.x`) or `-MakeTarget all` (builds all executables)
 
 ### Step 4: Stage runtime-ready binaries
 ```powershell
@@ -1052,6 +1083,20 @@ Builds QE using Intel oneAPI compilers.
 **Parameters:**
 - `-NoMpi` - Build serial QE without MPI support
 - `-QeSourceDir <path>` - Path to QE source (default: "upstream/qe")
+- `-MakeTarget <target>` - Build target: `pw` (default, builds only `pw.x`) or `all` (builds all QE executables)
+- `-FftwVendor <vendor>` - FFT backend: `Intel_DFTI` (default), `Intel_FFTW3`, `Internal`, or `AUTO`
+
+**Examples:**
+```powershell
+# Build only pw.x (default)
+.\scripts\build_qe_win_oneapi.ps1
+
+# Build all executables
+.\scripts\build_qe_win_oneapi.ps1 -MakeTarget all
+
+# Build all executables without MPI
+.\scripts\build_qe_win_oneapi.ps1 -MakeTarget all -NoMpi
+```
 
 **Environment Variables:**
 - `ONEAPI_ROOT` - Override oneAPI installation path (default: `C:\Program Files (x86)\Intel\oneAPI`)
@@ -1067,12 +1112,18 @@ Stages QE executables and required runtime DLLs into a distributable directory. 
 **Parameters:**
 - `-BuildDir <path>` - Path to QE build directory (default: "upstream/qe/build-win-oneapi")
 - `-DistDir <path>` - Target dist directory (default: "dist/win-oneapi")
-- `-Only <list>` - List of executable basenames to stage (e.g., "pw.x,ph.x")
+- `-Only <list>` - List of executable basenames to stage (e.g., "pw.x,ph.x"). **If not specified, stages ALL executables found in build directory.**
 - `-Clean` - Delete dist directory before staging
 - `-VerboseDeps` - Print parsed dependencies for each executable/DLL
 - `-WhatIf` - Dry run: print actions without copying/deleting
 - `-ProbeExe <name>` - Executable name to probe after staging (default: pw.x.exe if present)
-- `-Strict` - Fail if smoke test exit code != 0 OR "JOB DONE" not detected in output
+- `-NoStrict` - Disable strict mode (not recommended). By default, staging fails if smoke test exit code != 0 OR "JOB DONE" not detected in output
+
+**Behavior:**
+- **By default, stages ALL executables** found in the build directory's `bin` folder
+- Fails if zero executables are found (prevents silent failures)
+- Prints count and examples of staged executables for verification
+- Automatically detects MS-MPI builds and stages MS-MPI runtime DLLs
 
 **Output:**
 - Staged executables and DLLs in `$DistDir`
