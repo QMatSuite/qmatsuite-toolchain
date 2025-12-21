@@ -2,6 +2,22 @@
 
 Windows-specific build guide for Quantum ESPRESSO 7.5 using MSYS2 + MinGW-w64 (UCRT64 toolchain).
 
+## Who Should Read What
+
+**First-time builders:** Start with [Quick Start](#quick-start) — a single golden path to get QE running in <10 minutes.
+
+**Production builds:** Read [Production Build Guide](#production-build-guide) for detailed explanations, troubleshooting, and advanced options.
+
+**Debugging issues:** See [Troubleshooting](#troubleshooting) for common errors and fixes.
+
+**Understanding patches:** See [Patches](#patches) section. **Important:** Patch 005 is MinGW-specific and required for UPF v2 XML parsing.
+
+**Compiler flags:** See [Compiler Flags Reference](#compiler-flags-reference). **⚠️ Critical:** Debug flags are incompatible with OpenMP multi-threading.
+
+**Deep dive:** Appendices A and B document the complete failure timeline and stack overflow investigation.
+
+---
+
 ## Quick Start
 
 **Goal:** Build and run QE in <10 minutes using known-good production flags.
@@ -37,15 +53,14 @@ cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mi
 
 # 2. Apply required patches
 PATCH_DIR="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/patches"
-patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch"
+# Patch 005: MinGW-specific fix for UPF v2 XML parsing (required for MinGW gfortran)
+patch -Nbp1 -i "$PATCH_DIR/005-mingw-upf-xml-fixes.patch"
+# Patch 002: Fix devxlib build (apply after configure/make downloads devxlib)
+# If configure/make fails with devxlib errors, apply this patch and retry:
 patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/005-fix-xmltools-eof-rewind.patch"
-patch -Nbp1 -i "$PATCH_DIR/006-fix-empty-tag-robust-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/007-fix-i2c-mingw-empty-string.patch"
 
 # 3. Set production compiler flags (PRODUCTION-SAFE)
-export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz"
 export CFLAGS="-O2 -Wno-incompatible-pointer-types"
 export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
 export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5/artifacts"
@@ -72,8 +87,12 @@ cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mi
 powershell -Command ".\scripts\stage_qe_dlls.ps1"
 
 # 8. Test (critical: test with multiple threads!)
+# Find test files in toolchains\quantum_espresso\tests\resources
+# Copy scf-cg.in and Si.pz-vbc.UPF to work directory
 export OMP_NUM_THREADS=4
 cd dist/win-mingw
+cp /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/tests/resources/scf-cg.in .
+cp /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/tests/resources/Si.pz-vbc.UPF .
 ./pw.exe -in scf-cg.in > scf-cg.out 2>&1
 tail -20 scf-cg.out
 ```
@@ -82,7 +101,8 @@ tail -20 scf-cg.out
 - **Always use UCRT64 packages** (`mingw-w64-ucrt-x86_64-*`), not mingw64
 - **Stack reserve is critical**: `-Wl,--stack,268435456` (256MB) is required
 - **Test with OMP_NUM_THREADS>1** before declaring success
-- **Patches 005-007 are required** for MinGW robustness (UPF v2 parsing)
+- **Only patches 002 and 005 are required** for a successful build
+- **Patch 005 is MinGW-specific**: Required for UPF v2 XML parsing on MinGW gfortran (not needed for Intel oneAPI/ifort)
 
 ---
 
@@ -165,18 +185,33 @@ cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mi
 # Set patch directory
 PATCH_DIR="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/patches"
 
-# Apply patches (use -N to skip if already applied)
-patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch"
-patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch"
+# Apply required patches (use -N to skip if already applied)
+# Note: Only patches 002 and 005 are necessary. The others are optional.
 
-# Critical MinGW robustness fixes for UPF v2 parsing
-patch -Nbp1 -i "$PATCH_DIR/005-fix-xmltools-eof-rewind.patch"
-patch -Nbp1 -i "$PATCH_DIR/006-fix-empty-tag-robust-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/007-fix-i2c-mingw-empty-string.patch"
+# Patch 005: MinGW-specific fix for UPF v2 XML parsing (required for MinGW gfortran)
+# This patch is NOT needed for Intel oneAPI/ifort builds, only for MinGW.
+patch -Nbp1 -i "$PATCH_DIR/005-mingw-upf-xml-fixes.patch"
+
+# Patch 002: Fix devxlib build (apply after configure/make downloads devxlib)
+# In some cases, the external lib devxlib does not come with QE and will be
+# downloaded either during configure or make. Patch 002 must be applied after devxlib
+# is downloaded. If compilation fails due to devxlib, apply patch 002 and continue:
+patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch"
+
+# Optional patches (not required but may be useful):
+# patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch"
+# patch -Nbp1 -i "$PATCH_DIR/003-fix-install-c-libraries.patch"
+# patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch"
 ```
 
-**Why patches 005-007 are required:** These fix MinGW gfortran-specific issues with allocatable CHARACTER functions that cause UPF v2 parsing to fail. See Appendix A for details.
+**Available patches:**
+- `001-use-srand-instead-of-srandom.patch` - Use `srand` instead of `srandom` (Windows compatibility)
+- `002-fix-build-devxlib-on-mingw.patch` - Fix devxlib build on MinGW (required)
+- `003-fix-install-c-libraries.patch` - Fix installation of C libraries on Windows/MinGW
+- `004-fix-executable-suffix-on-mingw.patch` - Fix executable suffix handling
+- `005-mingw-upf-xml-fixes.patch` - Comprehensive fix for UPF v2 XML parsing issues on MinGW (required)
+
+**Note:** Only patches 002 and 005 are necessary for a successful build. Patch 005 consolidates all UPF/XML parsing fixes (previously patches 005-007, now deprecated). The other patches address additional compatibility issues but are not required.
 
 ### Step 3: Configure QE
 
@@ -184,8 +219,7 @@ Configure QE using the traditional `./configure` script with production-safe fla
 
 ```bash
 # Production-safe compiler flags (see "Compiler Flags Reference" below)
-# Might be useful if problem with stack overflow: FFLAGS = -fmax-stack-var-size=0
-export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz "
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz"
 export CFLAGS="-O2 -Wno-incompatible-pointer-types"
 export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
 export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5/artifacts"
@@ -314,6 +348,9 @@ ls -lh "$(which pw.exe)"
 
 **Test with multiple threads (critical!):**
 ```bash
+# Copy test files to work directory
+cp /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/tests/resources/scf-cg.in dist/win-mingw/
+cp /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/tests/resources/Si.pz-vbc.UPF dist/win-mingw/
 export OMP_NUM_THREADS=4
 cd dist/win-mingw
 ./pw.exe -in scf-cg.in > scf-cg.out 2>&1
@@ -330,7 +367,7 @@ These flags are safe for production builds and OpenMP execution:
 
 **FFLAGS (Production):**
 ```bash
--O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0
+-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz
 ```
 
 - `-O2`: Optimization level 2
@@ -340,7 +377,7 @@ These flags are safe for production builds and OpenMP execution:
 - `-std=legacy`: Use legacy Fortran standard (for compatibility)
 - `-fallow-argument-mismatch`: Allow BLAS argument type mismatches
 - `-fallow-invalid-boz`: Allow invalid binary/octal/hexadecimal constants
-- `-fmax-stack-var-size=0`: Push large automatic arrays off stack (Windows-specific)
+- `-fmax-stack-var-size=0`: (Optional) Push large automatic arrays off stack (Windows-specific). This might help with stack overflow issues, but is not necessary by default, so we do not set it.
 
 **CFLAGS (Production):**
 ```bash
@@ -360,7 +397,9 @@ These flags are safe for production builds and OpenMP execution:
 
 ### Debug-Only Flags (NOT OpenMP Safe)
 
-**⚠️ WARNING:** These flags are useful for single-threaded debugging but can destabilize OpenMP execution with multiple threads. Do NOT use in production builds.
+**⚠️ CRITICAL WARNING: Debug Flags Incompatible with OpenMP**
+
+**These flags are useful for single-threaded debugging but can destabilize OpenMP execution with multiple threads. Do NOT use in production builds or with `OMP_NUM_THREADS>1`.**
 
 **Debug flags (single-thread only):**
 ```bash
@@ -420,6 +459,10 @@ cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mi
 **Critical:** Always test with `OMP_NUM_THREADS>1` to verify OpenMP stability:
 
 ```bash
+# Find test files in toolchains\quantum_espresso\tests\resources
+# Copy scf-cg.in and Si.pz-vbc.UPF to your work directory
+cp /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/tests/resources/scf-cg.in .
+cp /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/tests/resources/Si.pz-vbc.UPF .
 export OMP_NUM_THREADS=4
 pw.exe -in scf-cg.in > scf-cg.out 2>&1
 ```
@@ -507,7 +550,7 @@ ptoolkit.f90: error: Type mismatch in argument 'c' at (1) (COMPLEX(8)/REAL(8))
 **Fix:**
 ```bash
 # Add -fallow-argument-mismatch to Fortran flags
-export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz"
 
 # Reconfigure and rebuild
 make veryclean
@@ -579,14 +622,15 @@ grep -E "F90FLAGS.*-J|FFLAGS.*-J" make.inc
 
 ### UPF/XML Parsing Crash - RESOLVED
 
-**Status:** Fixed via patches 005, 006, and 007. See Appendix A for full details.
+**Status:** Fixed via patch 005 (`005-mingw-upf-xml-fixes.patch`). See Appendix A for full details.
+
+**⚠️ MinGW-Specific Issue:** This crash only occurs with MinGW gfortran builds. Intel oneAPI/ifort builds do not have this issue and do not need Patch 005.
 
 The issue was caused by MinGW gfortran mishandling allocatable CHARACTER function returns in tag construction. The fix replaces allocatable functions with fixed-length buffer subroutines.
 
-**Required patches:**
-- `005-fix-xmltools-eof-rewind.patch` — defensive EOF rewind fix
-- `006-fix-empty-tag-robust-mingw.patch` — `capitalize_if_v2` fix
-- `007-fix-i2c-mingw-empty-string.patch` — `i2c()` fix and tag construction updates
+**Historical context:** The original fix was split across multiple patches (005-007), which have since been consolidated into a single unified patch `005-mingw-upf-xml-fixes.patch`. The old patches 005-007 are now deprecated and located in `patches/deprecated/`.
+
+**Note:** Only patches 002 and 005 are actually required for a successful build. Patch 005 consolidates all UPF/XML parsing fixes and is **required for MinGW builds only**.
 
 **Symptom (before fix):**
 
@@ -599,7 +643,7 @@ At line 1081 of file xmltools.f90
 Fortran runtime error: Read past ENDFILE record
 ```
 
-**Solution:** Apply patches 005-007 before building. These patches are now part of the standard build process.
+**Solution:** Apply patches 002 and 005 before building. See the build guide for details.
 
 ---
 
@@ -607,13 +651,25 @@ Fortran runtime error: Read past ENDFILE record
 
 The build process uses patches to fix MinGW-specific build issues. These patches are stored locally in `toolchains/quantum_espresso/windows/mingw/patches/`.
 
-**Required patches:**
+**Available patches:**
 - `001-use-srand-instead-of-srandom.patch` - Use `srand` instead of `srandom` (Windows compatibility)
-- `002-fix-build-devxlib-on-mingw.patch` - Fix devxlib build on MinGW
+- `002-fix-build-devxlib-on-mingw.patch` - Fix devxlib build on MinGW (required)
+- `003-fix-install-c-libraries.patch` - Fix installation of C libraries on Windows/MinGW
 - `004-fix-executable-suffix-on-mingw.patch` - Fix executable suffix handling
-- `005-fix-xmltools-eof-rewind.patch` - Defensive EOF rewind fix (UPF parsing)
-- `006-fix-empty-tag-robust-mingw.patch` - Fix allocatable CHARACTER bug (UPF parsing)
-- `007-fix-i2c-mingw-empty-string.patch` - Fix `i2c()` allocatable CHARACTER bug (UPF parsing)
+- `005-mingw-upf-xml-fixes.patch` - **MinGW-specific fix for UPF v2 XML parsing** (required)
+
+**Patch 005 Necessity & Scope:**
+- **Required for:** MinGW gfortran builds only
+- **Not needed for:** Intel oneAPI/ifort builds (they don't have this issue)
+- **Fixes:** UPF v2 XML parsing crashes caused by MinGW gfortran mishandling allocatable CHARACTER function returns
+- **Scope:** Fixes empty tag name bugs in `xmltools.f90`, `read_upf_new.f90`, and related UPF parsing code
+- **Why MinGW-specific:** MinGW gfortran has known issues with allocatable character variables when using repeated concatenation in loops, which causes empty strings in tag construction
+
+**Note:** Only patches 002 and 005 are necessary for a successful build. Patch 005 consolidates all UPF/XML parsing fixes (previously patches 005-007, now deprecated and located in `patches/deprecated/`). The other patches address additional compatibility issues but are not required.
+
+**Patch sources:**
+- **Patches 001-004 and PKGCONFIG**: Sourced from [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/81ee46abccd615927e1bded1704e89afa343ffe6/mingw-w64-quantum-espresso)
+- **Patch 005**: Custom patch developed through debugging (not from MSYS2)
 
 See `toolchains/quantum_espresso/windows/mingw/patches/README.md` for details about each patch.
 
@@ -637,6 +693,8 @@ This toolchain replaces the previous Intel oneAPI/ifort/MS-MPI based Windows bui
 ---
 
 ## Appendix A: Complete Failure Timeline and Postmortem
+
+**At-a-glance summary:** This appendix documents the complete journey from initial build attempts to a working production configuration. It covers 5 phases: (0) Stack overflow causing silent crashes, (1) Stack reserve fixes, (2) FFTW/OpenMP link failures, (3) Configure typos, (4) UPF v2 XML parsing crash (MinGW-specific, fixed by Patch 005), and (5) Debug flags causing false OpenMP errors. **Key takeaway:** Patch 005 is essential for MinGW because allocatable CHARACTER functions fail under MinGW gfortran but work fine with Intel oneAPI/ifort.
 
 This appendix documents the complete journey from initial build attempts to a working production configuration, including all major failures, diagnostic steps, and fixes. This is essential reading for understanding why each step exists and for debugging similar issues.
 
@@ -802,6 +860,8 @@ QE configure option is `--enable-openmp` (double dash). This is a common mistake
 
 ### Phase 4: The Real Major Blocker - UPF v2 XML Parsing Crash on MinGW
 
+**⚠️ MinGW-Specific Issue:** This phase documents why Patch 005 is required for MinGW builds but not for Intel oneAPI/ifort builds.
+
 **Symptom:**
 
 Even after FFTW/OpenMP issues were fixed, runtime failed during reading UPF v2 files.
@@ -903,13 +963,11 @@ The `i2c()` function in `xmltools.f90` also returned allocatable CHARACTER, whic
 
 **Patches applied:**
 
-- `005-fix-xmltools-eof-rewind.patch` — defensive EOF rewind fix
-- `006-fix-empty-tag-robust-mingw.patch` — `capitalize_if_v2` fix
-- `007-fix-i2c-mingw-empty-string.patch` — `i2c()` fix and tag construction updates
+- `005-mingw-upf-xml-fixes.patch` — unified patch consolidating all UPF/XML parsing fixes (replaces the deprecated patches 005-007)
 
 **Why this matters:**
 
-This is a MinGW-specific robustness fix; oneAPI didn't fail here. We keep it because it makes the code more portable and avoids a real compiler edge case.
+This is a **MinGW-specific robustness fix**; Intel oneAPI/ifort didn't fail here. The issue is specific to MinGW gfortran's handling of allocatable CHARACTER functions with loop concatenation. Patch 005 is **required for MinGW builds** but **not needed for Intel oneAPI/ifort builds**. We keep it because it makes the code more portable and avoids a real compiler edge case.
 
 **Result:**
 
@@ -972,6 +1030,8 @@ These debug flags are fine for single-thread diagnosis but can destabilize OpenM
 ---
 
 ## Appendix B: Stack Overflow Investigation
+
+**At-a-glance summary:** Documents why MSYS2 pacman-installed QE binaries fail with stack overflow (0xC00000FD). Root cause: default 2MB stack reserve is insufficient for QE's large automatic arrays. Solution: rebuild with `-Wl,--stack,268435456` (256MB). **Key takeaway:** Always verify stack reserve size with `objdump`; environment variables for OMP thread stack do NOT solve the main stack reserve problem.
 
 ### Symptom
 

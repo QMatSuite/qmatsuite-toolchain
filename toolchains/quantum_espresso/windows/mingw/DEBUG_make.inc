@@ -28,7 +28,7 @@
 TOPDIR = $(dir $(abspath $(filter %make.inc,$(MAKEFILE_LIST))))
 # if it doesn't work, uncomment the following line (edit if needed):
 
-# TOPDIR = /c/Users/hnhua/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5
+# TOPDIR = /c/Users/USERNAME/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5
 
 # DFLAGS  = precompilation options (possible arguments to -D and -U)
 #           used by the C compiler and preprocessor
@@ -203,4 +203,4 @@ QELIBS         = $(LIBXC_LIBS) \
 WGET = wget -O
 
 # Install directory - "make install" copies *.x executables there
-PREFIX = /c/Users/hnhua/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/qe/artifacts
+PREFIX = /c/Users/USERNAME/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/qe/artifacts

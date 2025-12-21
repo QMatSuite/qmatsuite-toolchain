@@ -40,6 +40,8 @@ source=("https://gitlab.com/QEF/q-e/-/archive/qe-${pkgver}/q-e-qe-${pkgver}.tar.
         "fox::git+https://github.com/pietrodelugas/fox#commit=${_fox_commit}"
         "pw2qmcpack::git+https://github.com/QMCPACK/pw2qmcpack#commit=${_pw2qmcpack_commit}"
         #"qe-gipaw::git+https://github.com/dceresoli/qe-gipaw#commit=${_qe_gipaw_commit}"
+        # Patches 001-004 sourced from MSYS2 MINGW-packages repository:
+        # https://github.com/msys2/MINGW-packages/tree/81ee46abccd615927e1bded1704e89afa343ffe6/mingw-w64-quantum-espresso
         "001-use-srand-instead-of-srandom.patch"
         "002-fix-build-devxlib-on-mingw.patch"
         "003-fix-install-c-libraries.patch"
