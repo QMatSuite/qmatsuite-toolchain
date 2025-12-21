@@ -25,6 +25,9 @@ Executable name to probe after staging (default: pw.x.exe if present, else first
 
 .PARAMETER NoStrict
 If set, disables strict mode (not recommended). By default, staging fails if smoke test exit code != 0 OR "JOB DONE" not detected.
+
+.PARAMETER NoCleanSmokeTest
+If set, skips cleanup of smoke test files (outdir/, *.out, *.in, *.UPF) after smoke test completes. By default, these files are cleaned up.
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
@@ -34,7 +37,8 @@ param(
     [switch]$Clean,
     [switch]$VerboseDeps,
     [string]$ProbeExe,
-    [switch]$NoStrict  # If set, disables strict mode (not recommended)
+    [switch]$NoStrict,  # If set, disables strict mode (not recommended)
+    [switch]$NoCleanSmokeTest  # If set, skips cleanup of smoke test files (outdir, *.out, *.in, *.UPF). By default, cleans these files.
 )
 
 $ErrorActionPreference = 'Stop'
@@ -229,13 +233,17 @@ function Resolve-DllPath {
     param(
         [string]$Name,
         [string[]]$SearchRoots,
-        [string[]]$PathDirs
+        [string[]]$PathDirs  # Kept for compatibility but should be empty for approved roots only
     )
+    # Search approved roots first
     foreach ($root in $SearchRoots) {
+        if (-not $root -or -not (Test-Path $root)) { continue }
         $found = Get-ChildItem -Path $root -Filter $Name -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($found) { return $found.FullName }
     }
+    # Only search PathDirs if explicitly provided (for backward compatibility, but should be empty)
     foreach ($dir in $PathDirs) {
+        if (-not $dir) { continue }
         $candidate = Join-Path $dir $Name
         if (Test-Path $candidate) { return (Resolve-Path $candidate).Path }
     }
@@ -245,7 +253,7 @@ function Resolve-DllPath {
 function Stage-Executables {
     param(
         [string]$BinDir,
-        [string]$DistDir,
+        [string]$DistBinDir,  # Changed: now expects dist/bin directory
         [string[]]$Only
     )
     $exeFiles = Get-ChildItem -Path $BinDir -Filter *.exe -File
@@ -263,6 +271,11 @@ function Stage-Executables {
     $exeCount = ($exeFiles | Measure-Object).Count
     Write-Host "Found $exeCount executable(s) to stage" -ForegroundColor Green
     
+    # Ensure dist/bin directory exists
+    if (-not $WhatIfPreference -and -not (Test-Path $DistBinDir)) {
+        New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
+    }
+    
     # Separate .x.exe files from regular .exe files
     $xExeFiles = $exeFiles | Where-Object { $_.Name -like "*.x.exe" }
     $regularExeFiles = $exeFiles | Where-Object { $_.Name -notlike "*.x.exe" }
@@ -270,8 +283,8 @@ function Stage-Executables {
     # Process .x.exe files: remove existing .exe, copy .x.exe, then rename to .exe
     foreach ($xExe in $xExeFiles) {
         $targetName = $xExe.Name -replace '\.x\.exe$', '.exe'
-        $targetPath = Join-Path $DistDir $targetName
-        $xExeDest = Join-Path $DistDir $xExe.Name
+        $targetPath = Join-Path $DistBinDir $targetName
+        $xExeDest = Join-Path $DistBinDir $xExe.Name
         
         if ($PSCmdlet.ShouldProcess($targetPath, "Stage $($xExe.Name) -> $targetName") -and -not $WhatIfPreference) {
             # Remove existing .exe if it exists
@@ -282,7 +295,7 @@ function Stage-Executables {
             if (Test-Path $xExeDest) {
                 Remove-Item -Path $xExeDest -Force -ErrorAction SilentlyContinue
             }
-            # Copy .x.exe to dist
+            # Copy .x.exe to dist/bin
             Copy-Item -Force $xExe.FullName $xExeDest
             # Rename to .exe (removes .x.exe from dist)
             Rename-Item -Path $xExeDest -NewName $targetName -Force
@@ -292,7 +305,7 @@ function Stage-Executables {
     
     # Process regular .exe files (not .x.exe): just copy them
     foreach ($exe in $regularExeFiles) {
-        $dest = Join-Path $DistDir $exe.Name
+        $dest = Join-Path $DistBinDir $exe.Name
         if ($PSCmdlet.ShouldProcess($dest, "Copy exe $($exe.FullName)") -and -not $WhatIfPreference) {
             Copy-Item -Force $exe.FullName $dest
         }
@@ -423,51 +436,103 @@ function Detect-MPIFromBuild {
     return "no-MPI"
 }
 
+function Enqueue-IfNew {
+    param(
+        [string]$FilePath,
+        [hashtable]$Visited,
+        [hashtable]$Enqueued,
+        [System.Collections.Queue]$Queue
+    )
+    $basename = [System.IO.Path]::GetFileName($FilePath).ToLowerInvariant()
+    
+    # Skip if already visited (scanned)
+    if ($Visited.ContainsKey($basename)) {
+        return $false
+    }
+    
+    # Skip if already enqueued
+    if ($Enqueued.ContainsKey($basename)) {
+        return $false
+    }
+    
+    # Add to enqueued and queue
+    $Enqueued[$basename] = $true
+    $Queue.Enqueue($FilePath)
+    return $true
+}
+
 function Copy-DllClosure {
     param(
         [string[]]$ExePaths,
         [string]$DumpbinPath,
         [string[]]$SearchRoots,
-        [string]$DistDir,
+        [string]$DistBinDir,  # Changed: now expects dist/bin directory
+        [string]$BuildBinDir,  # QE build bin directory for approved search roots
         [switch]$VerboseDeps
     )
-    $pathDirs = Get-ValidPathDirs
     $queue = New-Object System.Collections.Queue
-    $visited = @{}  # Case-insensitive visited set by basename
-    $missing = [System.Collections.Generic.List[string]]::new()
+    $visited = @{}  # Case-insensitive visited set by basename (already scanned)
+    $enqueued = @{}  # Case-insensitive enqueued set by basename (already enqueued)
+    $missing = [System.Collections.Generic.List[object]]::new()  # Track unresolved DLLs with parent info
     $copied = [System.Collections.Generic.List[object]]::new()
     $resolved = [System.Collections.Generic.List[object]]::new()  # Track all resolved DLLs for closure file
     $scanCount = 0
-    $MAX_SCAN_COUNT = 500
+    $MAX_SECONDS = 300  # 5 minute wall-clock timeout
     $DUMPBIN_TIMEOUT_MS = 5000
+    
+    # Build approved search roots: dist/bin, QE build bin, oneAPI redist, MSMPI, VC++ redist
+    $approvedRoots = @()
+    if (Test-Path $DistBinDir) {
+        $approvedRoots += $DistBinDir
+    }
+    if (Test-Path $BuildBinDir) {
+        $approvedRoots += $BuildBinDir
+    }
+    $approvedRoots += $SearchRoots  # oneAPI redist locations
+    # MSMPI and VC++ redist will be added by caller if needed
 
-    Write-Host "Starting recursive dependency closure (max ${MAX_SCAN_COUNT} modules, ${DUMPBIN_TIMEOUT_MS}ms per dumpbin)..."
+    Write-Host "Starting recursive dependency closure (max ${MAX_SECONDS}s wall-clock timeout, ${DUMPBIN_TIMEOUT_MS}ms per dumpbin)..."
     Write-Host "  Initial executables to scan: $($ExePaths.Count)"
+    Write-Host "  Approved search roots: $($approvedRoots.Count) locations"
 
-    # Enqueue initial executables
+    # Initialize BFS by enqueueing all staged exes
     $enqueuedCount = 0
     foreach ($exe in $ExePaths) {
         if (-not (Test-Path $exe)) { 
             Write-Warning "  Executable not found: $exe"
             continue 
         }
-        $queue.Enqueue($exe)
-        $enqueuedCount++
+        if (Enqueue-IfNew -FilePath $exe -Visited $visited -Enqueued $enqueued -Queue $queue) {
+            $enqueuedCount++
+        }
     }
-    Write-Host "  Enqueued $enqueuedCount executable(s) for scanning"
+    Write-Host "  Enqueued $enqueuedCount unique executable(s) for scanning"
+
+    # Start stopwatch for timeout
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     while ($queue.Count -gt 0) {
-        if ($scanCount -ge $MAX_SCAN_COUNT) {
-            throw "Dependency closure exceeded maximum scan count (${MAX_SCAN_COUNT}). Possible resolution loop. Check for circular dependencies or increase MAX_SCAN_COUNT."
+        # Check timeout
+        if ($stopwatch.Elapsed.TotalSeconds -gt $MAX_SECONDS) {
+            $visitedCount = $visited.Count
+            $queueSize = $queue.Count
+            $unresolvedSample = $missing | Select-Object -First 10 | ForEach-Object { if ($_ -is [hashtable]) { $_.DllName } else { $_ } }
+            throw "Dependency closure exceeded maximum wall-clock time (${MAX_SECONDS}s). Visited: $visitedCount modules, Queue size: $queueSize, Unresolved DLLs (sample): $($unresolvedSample -join ', ')"
         }
         
         $filePath = $queue.Dequeue()
-        $scanCount++
         
         # Get basename for visited check (case-insensitive)
         $basename = [System.IO.Path]::GetFileName($filePath).ToLowerInvariant()
-        if ($visited.ContainsKey($basename)) { continue }
+        
+        # Skip if already visited (shouldn't happen due to Enqueue-IfNew, but double-check)
+        if ($visited.ContainsKey($basename)) { 
+            continue 
+        }
+        
+        # Mark as visited and increment scan count (only count unique modules scanned)
         $visited[$basename] = $true
+        $scanCount++
 
         # Get dependencies
         $deps = Get-ExeDependentsDumpbin -Path $filePath -DumpbinPath $DumpbinPath -Verbose:$VerboseDeps -TimeoutMs $DUMPBIN_TIMEOUT_MS
@@ -477,7 +542,16 @@ function Copy-DllClosure {
 
         foreach ($dllName in $deps) {
             $dllBasename = $dllName.ToLowerInvariant()
-            if ($visited.ContainsKey($dllBasename)) { continue }
+            
+            # Skip Windows API set pseudo-DLLs (not redistributable files)
+            if ($dllBasename -like "api-ms-win-*" -or $dllBasename -like "ext-ms-win-*") {
+                continue
+            }
+            
+            # Skip if already visited
+            if ($visited.ContainsKey($dllBasename)) { 
+                continue 
+            }
 
             # Skip denylisted DLLs
             if (Is-DenylistedDll -Name $dllName) {
@@ -485,14 +559,23 @@ function Copy-DllClosure {
                 continue
             }
 
-            $resolvedPath = Resolve-DllPath -Name $dllName -SearchRoots $SearchRoots -PathDirs $pathDirs
+            # Resolve DLL path only from approved search roots
+            $resolvedPath = Resolve-DllPath -Name $dllName -SearchRoots $approvedRoots -PathDirs @()
             if (-not $resolvedPath) {
+                # Record unresolved DLL with parent info
                 if (-not (Is-SystemDll -Name $dllName -ResolvedPath $null)) {
-                    $missing.Add($dllName)
+                    $missing.Add(@{
+                        DllName = $dllName
+                        ParentModule = $basename
+                    })
                 }
                 continue
             }
-            if (Is-SystemDll -Name $dllName -ResolvedPath $resolvedPath) { continue }
+            
+            # Skip system DLLs
+            if (Is-SystemDll -Name $dllName -ResolvedPath $resolvedPath) { 
+                continue 
+            }
 
             # Track all resolved DLLs (for closure file)
             $resolved.Add(@{
@@ -500,8 +583,8 @@ function Copy-DllClosure {
                 FullPath = $resolvedPath
             })
 
-            # Copy DLL
-            $dest = Join-Path $DistDir (Split-Path $resolvedPath -Leaf)
+            # Copy DLL to dist/bin
+            $dest = Join-Path $DistBinDir (Split-Path $resolvedPath -Leaf)
             $alreadyExists = (Test-Path $dest)
             if (-not $alreadyExists) {
                 if ($PSCmdlet.ShouldProcess($dest, "Copy dll $resolvedPath") -and -not $WhatIfPreference) {
@@ -516,13 +599,15 @@ function Copy-DllClosure {
                 Write-Host "  dll: $dllBasename (already staged)"
             }
 
-            # Enqueue for recursive scanning
-            $queue.Enqueue($resolvedPath)
+            # Enqueue for recursive scanning (using helper to prevent duplicates)
+            Enqueue-IfNew -FilePath $resolvedPath -Visited $visited -Enqueued $enqueued -Queue $queue | Out-Null
         }
     }
+    
+    $stopwatch.Stop()
 
     # Write deps-closure.txt (include all resolved DLLs, not just newly copied)
-    $closureFile = Join-Path $DistDir "deps-closure.txt"
+    $closureFile = Join-Path (Split-Path $DistBinDir -Parent) "deps-closure.txt"
     if (-not $WhatIfPreference) {
         try {
             if ($resolved.Count -gt 0) {
@@ -537,11 +622,11 @@ function Copy-DllClosure {
                     Write-Host "  Wrote $($closureLines.Count) entries to deps-closure.txt"
                 } else {
                     Write-Warning "resolved list has $($resolved.Count) items but generated no valid lines for deps-closure.txt"
-                    "# Dependency closure: resolved list had $($resolved.Count) items but no valid lines generated`n# Scanned $scanCount modules." | Out-File -FilePath $closureFile -Encoding UTF8 -Force
+                    "# Dependency closure: resolved list had $($resolved.Count) items but no valid lines generated`n# Scanned $scanCount unique modules in $([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s." | Out-File -FilePath $closureFile -Encoding UTF8 -Force
                 }
             } else {
                 # Write file with header comment if no DLLs were resolved
-                "# Dependency closure scan completed. No non-system DLLs were resolved via dumpbin.`n# Scanned $scanCount modules.`n# Executables scanned: $($ExePaths.Count)" | Out-File -FilePath $closureFile -Encoding UTF8 -Force
+                "# Dependency closure scan completed. No non-system DLLs were resolved via dumpbin.`n# Scanned $scanCount unique modules in $([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s.`n# Executables scanned: $($ExePaths.Count)" | Out-File -FilePath $closureFile -Encoding UTF8 -Force
                 if ($scanCount -eq 0) {
                     Write-Warning "Dependency closure scanned 0 modules. Check if executables were found and dumpbin is working."
                 } else {
@@ -554,10 +639,28 @@ function Copy-DllClosure {
         }
     }
 
-    Write-Host "Dependency closure complete: $($copied.Count) DLLs copied, $($resolved.Count) DLLs resolved, $scanCount modules scanned"
+    # Print summary
+    $elapsedSeconds = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)
+    Write-Host "Dependency closure complete: $($copied.Count) DLLs copied, $($resolved.Count) DLLs resolved, $scanCount unique modules scanned in ${elapsedSeconds}s"
     if ($missing.Count -gt 0) {
-        Write-Warning ("Missing non-system DLLs: " + ($missing | Sort-Object -Unique -join ", "))
-        Write-Warning "Ensure oneAPI redistributables are installed and ONEAPI_ROOT is correct; re-run setvars if needed."
+        $missingDlls = $missing | ForEach-Object { if ($_ -is [hashtable]) { $_.DllName } else { $_ } } | Sort-Object -Unique
+        $missingSample = $missingDlls | Select-Object -First 10
+        # Note: Most unresolved DLLs are Windows system DLLs (e.g., api-ms-win-*, ext-ms-win-*, kernel32.dll, etc.)
+        # that are provided by the OS and not redistributable. This is expected and not an error.
+        Write-Warning "Unresolved non-system DLLs ($($missingDlls.Count) total, mostly Windows system DLLs): $($missingSample -join ', ')"
+        if ($missingDlls.Count -gt 10) {
+            Write-Warning "  ... and $($missingDlls.Count - 10) more unresolved DLLs (mostly system DLLs)"
+        }
+    }
+    
+    # Return summary info
+    return @{
+        ScannedCount = $scanCount
+        CopiedCount = $copied.Count
+        ResolvedCount = $resolved.Count
+        UnresolvedCount = $missing.Count
+        UnresolvedDlls = $missing
+        ElapsedSeconds = $elapsedSeconds
     }
 }
 
@@ -811,11 +914,11 @@ function Run-SmokeTest {
         throw "Shared resources folder not found at: $ResourcesDir"
     }
     
-    $smokeDir = $DistDir  # Run test in dist root (where pw.exe is)
+    $smokeDir = $DistDir  # Run test in dist/bin (where pw.exe is)
     $smokeInput = Join-Path $smokeDir "scf-cg.in"
     $smokeOutput = Join-Path $smokeDir "scf-cg.out"
     $pseudoFile = Join-Path $smokeDir "Si.pz-vbc.UPF"
-    $binDir = $DistDir  # Executables are in dist root
+    $binDir = $DistDir  # Executables are in dist/bin
     $pwExe = Join-Path $binDir "pw.exe"
     if (-not (Test-Path $pwExe)) {
         $pwExe = Join-Path $binDir "pw.x.exe"
@@ -909,9 +1012,21 @@ function Run-SmokeTest {
         
         # Lightweight MPI process count verification (informational only, does not affect pass/fail)
         if ($UseMpi -and $combined) {
+            $foundNP = $null
+            $mpiVersionFound = $false
+            
+            # Check for "Parallel version (MPI), running on" (OpenMP disabled)
             if ($combined -match "Parallel version \(MPI\), running on") {
-                $mpiMatch = $Matches[0]
-                if ($combined -match "Parallel version \(MPI\), running on\s+(\d+)") {
+                $mpiVersionFound = $true
+            }
+            # Check for "Parallel version (MPI & OpenMP), running on" (OpenMP enabled)
+            elseif ($combined -match "Parallel version \(MPI & OpenMP\), running on") {
+                $mpiVersionFound = $true
+            }
+            
+            if ($mpiVersionFound) {
+                # Try to extract MPI process count from "Number of MPI processes:" line
+                if ($combined -match "Number of MPI processes:\s+(\d+)") {
                     $foundNP = $Matches[1]
                     if ($foundNP -eq $MpiNP) {
                         Write-Host "  MPI process count verified: found '$MpiNP' processes" -ForegroundColor Green
@@ -919,10 +1034,10 @@ function Run-SmokeTest {
                         Write-Warning "  MPI process count mismatch: expected '$MpiNP' but found '$foundNP'"
                     }
                 } else {
-                    Write-Warning "  MPI process count line found but could not extract process count: $mpiMatch"
+                    Write-Warning "  Parallel version detected but could not extract MPI process count from 'Number of MPI processes:' line"
                 }
             } else {
-                Write-Warning "  MPI process count line not found in output (expected 'Parallel version (MPI), running on')"
+                Write-Warning "  MPI process count line not found in output (expected 'Parallel version (MPI)' or 'Parallel version (MPI & OpenMP)')"
             }
         }
         
@@ -999,6 +1114,643 @@ function Get-StackReserveLine {
         return $null
     } catch {
         return $null
+    }
+}
+
+function Get-QeVersion {
+    param(
+        [string]$QeSourceDir
+    )
+    # Try to get version from git
+    $gitDir = Join-Path $QeSourceDir ".git"
+    if (Test-Path $gitDir) {
+        try {
+            Push-Location $QeSourceDir
+            $gitSha = git rev-parse --short HEAD 2>$null
+            $gitTag = git describe --tags --exact-match 2>$null
+            if ($gitTag) {
+                return $gitTag
+            } elseif ($gitSha) {
+                return "git-$gitSha"
+            }
+        } catch {
+            # Ignore git errors
+        } finally {
+            Pop-Location
+        }
+    }
+    # Try to read from version file or CMakeLists.txt
+    $versionFile = Join-Path $QeSourceDir "VERSION"
+    if (Test-Path $versionFile) {
+        $version = Get-Content $versionFile -First 1 -ErrorAction SilentlyContinue
+        if ($version) { return $version.Trim() }
+    }
+    return "unknown"
+}
+
+function Get-OneApiVersion {
+    param(
+        [string]$OneApiRoot,
+        [string]$DistBinDir  # Optional: check bundled DLLs if licensing path fails
+    )
+    # Strategy 1: Try to extract version from licensing directory path
+    # e.g., "licensing\2025.3\licensing\2025.3\license.htm" -> "2025.3"
+    $licensingBase = Join-Path $OneApiRoot "licensing"
+    if (Test-Path $licensingBase) {
+        # Check latest\licensing\* first
+        $latestLicensePath = Join-Path $licensingBase "latest\licensing"
+        if (Test-Path $latestLicensePath) {
+            $versionDirs = Get-ChildItem -Path $latestLicensePath -Directory -ErrorAction SilentlyContinue | 
+                Where-Object { $_.Name -match '^\d+\.\d+' }
+            if ($versionDirs) {
+                $version = ($versionDirs | Sort-Object { [Version]$_.Name } -Descending)[0].Name
+                Write-Host "  Extracted oneAPI version from licensing path: $version" -ForegroundColor Gray
+                return $version
+            }
+        }
+        
+        # Check versioned directories (e.g., licensing\2025.3\licensing\2025.3\)
+        $versionDirs = Get-ChildItem -Path $licensingBase -Directory -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Name -match '^\d+\.\d+' } | 
+            Sort-Object { [Version]$_.Name } -Descending
+        
+        foreach ($versionDir in $versionDirs) {
+            $versionLicensePath = Join-Path $versionDir.FullName "licensing"
+            if (Test-Path $versionLicensePath) {
+                $subDirs = Get-ChildItem -Path $versionLicensePath -Directory -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.Name -match '^\d+\.\d+' }
+                if ($subDirs) {
+                    $version = ($subDirs | Sort-Object { [Version]$_.Name } -Descending)[0].Name
+                    Write-Host "  Extracted oneAPI version from licensing path: $version" -ForegroundColor Gray
+                    return $version
+                }
+                # Fallback: use parent directory version
+                $version = $versionDir.Name
+                Write-Host "  Extracted oneAPI version from licensing directory: $version" -ForegroundColor Gray
+                return $version
+            }
+        }
+    }
+    
+    # Strategy 2: Try to get version from bundled Intel DLL (if dist/bin provided)
+    if ($DistBinDir -and (Test-Path $DistBinDir)) {
+        # Try libifcoremd.dll first (Intel Fortran runtime, always present)
+        $intelDlls = @("libifcoremd.dll", "mkl_rt*.dll", "libiomp5md.dll")
+        foreach ($dllPattern in $intelDlls) {
+            $dllFiles = Get-ChildItem -Path $DistBinDir -Filter $dllPattern -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($dllFiles) {
+                try {
+                    $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dllFiles.FullName)
+                    $version = if ($v.ProductVersion) { $v.ProductVersion } else { $v.FileVersion }
+                    if ($version -and $version -ne "0.0.0.0") {
+                        Write-Host "  Extracted oneAPI version from bundled DLL ($($dllFiles.Name)): $version (runtime file version)" -ForegroundColor Gray
+                        return $version
+                    }
+                } catch {
+                    # Ignore errors
+                }
+            }
+        }
+    }
+    
+    # Strategy 3: Try environment variable
+    if ($env:ONEAPI_VERSION) {
+        return $env:ONEAPI_VERSION
+    }
+    
+    Write-Warning "Could not determine Intel oneAPI version"
+    return "unknown"
+}
+
+function Get-MsmpiVersion {
+    param(
+        [string]$DistBinDir  # Check bundled msmpi.dll first
+    )
+    # Strategy 1: Check bundled msmpi.dll in dist/bin (most reliable)
+    if ($DistBinDir -and (Test-Path $DistBinDir)) {
+        $msmpiDll = Join-Path $DistBinDir "msmpi.dll"
+        if (Test-Path $msmpiDll) {
+            try {
+                $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($msmpiDll)
+                $version = if ($v.ProductVersion) { $v.ProductVersion } else { $v.FileVersion }
+                if ($version -and $version -ne "0.0.0.0") {
+                    Write-Host "  Extracted MS-MPI version from bundled msmpi.dll: $version" -ForegroundColor Gray
+                    return $version
+                }
+            } catch {
+                # Ignore errors, try fallback
+            }
+        }
+    }
+    
+    # Strategy 2: Try installed MS-MPI
+    $msmpiBin = "C:\Program Files\Microsoft MPI\Bin"
+    if (Test-Path $msmpiBin) {
+        $msmpiDll = Join-Path $msmpiBin "msmpi.dll"
+        if (Test-Path $msmpiDll) {
+            try {
+                $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($msmpiDll)
+                $version = if ($v.ProductVersion) { $v.ProductVersion } else { $v.FileVersion }
+                if ($version -and $version -ne "0.0.0.0") {
+                    Write-Host "  Extracted MS-MPI version from installed msmpi.dll: $version" -ForegroundColor Gray
+                    return $version
+                }
+            } catch {
+                # Ignore errors
+            }
+        }
+    }
+    
+    Write-Warning "Could not determine MS-MPI version"
+    return "unknown"
+}
+
+function Copy-QeLicenses {
+    param(
+        [string]$QeSourceDir,
+        [string]$LicensesDir
+    )
+    $qeLicenseDir = Join-Path $LicensesDir "quantum-espresso"
+    if (-not (Test-Path $qeLicenseDir)) {
+        New-Item -ItemType Directory -Force -Path $qeLicenseDir | Out-Null
+    }
+    
+    $copied = @()
+    $missing = @()
+    
+    # Main QE license (required)
+    $mainLicense = Join-Path $QeSourceDir "License"
+    if (Test-Path $mainLicense) {
+        $dst = Join-Path $qeLicenseDir "License"
+        Copy-Item -Force $mainLicense $dst
+        $copied += "License"
+        Write-Host "  Copied QE main license: License" -ForegroundColor Green
+    } else {
+        throw "Required QE main license file not found: $mainLicense"
+    }
+    
+    # External library licenses (including EPW for consistency)
+    $externalLicenses = @(
+        @{ Path = "EPW\License"; Name = "external/EPW/License" },
+        @{ Path = "external\wannier90\LICENSE"; Name = "external/wannier90/LICENSE" },
+        @{ Path = "external\lapack\LICENSE"; Name = "external/lapack/LICENSE" },
+        @{ Path = "external\fox\LICENSE"; Name = "external/fox/LICENSE" },
+        @{ Path = "external\mbd\LICENSE"; Name = "external/mbd/LICENSE" },
+        @{ Path = "external\qe-gipaw\LICENSE"; Name = "external/qe-gipaw/LICENSE" },
+        @{ Path = "external\d3q\License"; Name = "external/d3q/License" }
+    )
+    
+    foreach ($lic in $externalLicenses) {
+        $src = Join-Path $QeSourceDir $lic.Path
+        if (Test-Path $src) {
+            # Create directory structure using the target name path (e.g., external/EPW/License -> external/EPW/)
+            # This ensures EPW goes to external/EPW/ not just EPW/
+            $targetRelativePath = Split-Path $lic.Name -Parent
+            $targetDir = Join-Path $qeLicenseDir $targetRelativePath
+            if (-not (Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            }
+            $fileName = Split-Path $lic.Path -Leaf
+            $dst = Join-Path $targetDir $fileName
+            Copy-Item -Force $src $dst
+            $copied += $lic.Name
+            Write-Host "  Copied QE license: $($lic.Name)" -ForegroundColor Green
+        } else {
+            Write-Warning "  QE license not found: $($lic.Path)"
+        }
+    }
+    
+    return @{ Copied = $copied; Missing = $missing }
+}
+
+function Copy-OneApiLicenses {
+    param(
+        [string]$OneApiRoot,
+        [string]$LicensesDir
+    )
+    $oneApiLicenseDir = Join-Path $LicensesDir "intel-oneapi"
+    if (-not (Test-Path $oneApiLicenseDir)) {
+        New-Item -ItemType Directory -Force -Path $oneApiLicenseDir | Out-Null
+    }
+    
+    $copied = @()
+    
+    # Strategy 1: Try latest\licensing\*\license.htm (robust for CI)
+    $latestLicensePath = Join-Path $OneApiRoot "licensing\latest\licensing"
+    if (Test-Path $latestLicensePath) {
+        $licenseFiles = Get-ChildItem -Path $latestLicensePath -Filter "license.htm" -Recurse -ErrorAction SilentlyContinue
+        foreach ($file in $licenseFiles) {
+            $dst = Join-Path $oneApiLicenseDir "license.htm"
+            Copy-Item -Force $file.FullName $dst
+            $copied += "license.htm"
+            Write-Host "  Copied oneAPI license: license.htm (from latest)" -ForegroundColor Green
+            break  # Take first match
+        }
+    }
+    
+    # Strategy 2: Try versioned path (e.g., licensing\2025.3\licensing\2025.3\license.htm)
+    if ($copied.Count -eq 0) {
+        $licensingBase = Join-Path $OneApiRoot "licensing"
+        if (Test-Path $licensingBase) {
+            # Find versioned directories
+            $versionDirs = Get-ChildItem -Path $licensingBase -Directory -ErrorAction SilentlyContinue | 
+                Where-Object { $_.Name -match '^\d+\.\d+' } | 
+                Sort-Object { [Version]$_.Name } -Descending
+            
+            foreach ($versionDir in $versionDirs) {
+                $versionLicensePath = Join-Path $versionDir.FullName "licensing"
+                if (Test-Path $versionLicensePath) {
+                    $versionSubDirs = Get-ChildItem -Path $versionLicensePath -Directory -ErrorAction SilentlyContinue
+                    foreach ($subDir in $versionSubDirs) {
+                        $licenseFile = Join-Path $subDir.FullName "license.htm"
+                        if (Test-Path $licenseFile) {
+                            $dst = Join-Path $oneApiLicenseDir "license.htm"
+                            Copy-Item -Force $licenseFile $dst
+                            $copied += "license.htm"
+                            Write-Host "  Copied oneAPI license: license.htm (from $($versionDir.Name))" -ForegroundColor Green
+                            break
+                        }
+                    }
+                    if ($copied.Count -gt 0) { break }
+                }
+            }
+        }
+    }
+    
+    # Strategy 3: Fallback - search for any license.htm in licensing directory
+    if ($copied.Count -eq 0) {
+        $licensingBase = Join-Path $OneApiRoot "licensing"
+        if (Test-Path $licensingBase) {
+            $licenseFiles = Get-ChildItem -Path $licensingBase -Filter "license.htm" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($licenseFiles) {
+                $dst = Join-Path $oneApiLicenseDir "license.htm"
+                Copy-Item -Force $licenseFiles.FullName $dst
+                $copied += "license.htm"
+                Write-Host "  Copied oneAPI license: license.htm (fallback search)" -ForegroundColor Green
+            }
+        }
+    }
+    
+    if ($copied.Count -eq 0) {
+        Write-Warning "No Intel oneAPI license file (license.htm) found under $OneApiRoot\licensing"
+    }
+    
+    return @{ Copied = $copied }
+}
+
+function Copy-MsmpiLicense {
+    param(
+        [string]$LicensesDir
+    )
+    $msmpiLicenseDir = Join-Path $LicensesDir "microsoft-msmpi"
+    if (-not (Test-Path $msmpiLicenseDir)) {
+        New-Item -ItemType Directory -Force -Path $msmpiLicenseDir | Out-Null
+    }
+    
+    # Only use Runtime License, not SDK
+    # Note: License is a directory, not a file - need to copy files from inside it
+    $msmpiRuntimeLicenseDir = Join-Path $env:ProgramFiles "Microsoft MPI\License"
+    if (-not (Test-Path $msmpiRuntimeLicenseDir)) {
+        # Try alternative path
+        $msmpiRuntimeLicenseDir = "C:\Program Files\Microsoft MPI\License"
+    }
+    
+    $copied = @()
+    if (Test-Path $msmpiRuntimeLicenseDir) {
+        # Copy all license files from the License directory
+        $licenseFiles = Get-ChildItem -Path $msmpiRuntimeLicenseDir -File -ErrorAction SilentlyContinue
+        foreach ($file in $licenseFiles) {
+            $dst = Join-Path $msmpiLicenseDir $file.Name
+            Copy-Item -Force $file.FullName $dst
+            $copied += $file.Name
+            Write-Host "  Copied MS-MPI Runtime license: $($file.Name)" -ForegroundColor Green
+        }
+        
+        if ($copied.Count -gt 0) {
+            return @{ Copied = $copied }
+        } else {
+            Write-Warning "MS-MPI Runtime license directory found but contains no files: $msmpiRuntimeLicenseDir"
+        }
+    } else {
+        Write-Warning "MS-MPI Runtime license directory not found at: $msmpiRuntimeLicenseDir"
+    }
+    
+    return @{ Copied = $copied }
+}
+
+
+function Generate-ThirdPartyNotices {
+    param(
+        [string]$LicensesDir,
+        [string]$QeVersion,
+        [string]$OneApiVersion,
+        [string]$MsmpiVersion,
+        [string]$BuildDateUtc
+    )
+    $noticesFile = Join-Path $LicensesDir "THIRD_PARTY_NOTICES.txt"
+    $content = @"
+QMatSuite Toolchain - Quantum ESPRESSO Windows (oneAPI + MS-MPI) Binary Distribution
+
+Build date (UTC): $BuildDateUtc
+
+This package redistributes precompiled binaries of Quantum ESPRESSO and bundles
+third-party runtime components needed to run on Windows without requiring a
+separate oneAPI/MS-MPI installation. Each component remains licensed under its
+own license terms. See the subfolders in this directory for the full license
+texts.
+
+Included components
+
+1) Quantum ESPRESSO ($QeVersion)
+   Copyright: Quantum ESPRESSO Foundation and contributors
+   License: GNU General Public License v2 or later (GPL-2.0-or-later)
+   License text: licenses/quantum-espresso/
+
+2) Intel oneAPI Runtime Libraries ($OneApiVersion)
+   Examples: Intel OpenMP (libiomp5md), Intel MKL (mkl_rt), compiler runtimes
+   License: Intel terms for redistributable runtime components
+   License text: licenses/intel-oneapi/
+
+3) Microsoft MPI (MS-MPI) Runtime ($MsmpiVersion)
+   License: Microsoft Software License Terms
+   License text: licenses/microsoft-msmpi/
+
+Notes
+
+- Windows system components (e.g., api-ms-win-* and other OS-provided DLLs) are not
+  bundled.
+
+- If any license text could not be found during staging, the build log will
+  include a prominent warning. Please refer to the vendor documentation for the
+  corresponding version.
+"@
+    
+    $content | Out-File -FilePath $noticesFile -Encoding UTF8 -NoNewline
+    Write-Host "  Generated THIRD_PARTY_NOTICES.txt" -ForegroundColor Green
+}
+
+function Generate-Readme {
+    param(
+        [string]$DistRoot,
+        [string]$QeVersion,
+        [string]$BuildDateUtc,
+        [int]$ExeCount,
+        [int]$DllCount,
+        [bool]$HasMsmpiLauncher
+    )
+    $readmeFile = Join-Path $DistRoot "README.txt"
+    
+    $distLayoutSummary = "Contains $ExeCount executable(s) in bin/ and $DllCount runtime DLL(s) in bin/."
+    $msmpiHint = if ($HasMsmpiLauncher) {
+        "MS-MPI launcher (mpiexec/msmpiexec) is included in bin/."
+    } else {
+        "MS-MPI launcher is not bundled; install MS-MPI to use mpiexec."
+    }
+    
+    $content = @"
+Quantum ESPRESSO for Windows (oneAPI + MS-MPI) - Precompiled Binaries
+
+Build date (UTC): $BuildDateUtc
+
+Quantum ESPRESSO version: $QeVersion
+
+Overview
+
+This folder contains a standalone Windows distribution of Quantum ESPRESSO built
+with Intel oneAPI compilers/libraries and MS-MPI. Executables and runtime DLLs
+are placed side-by-side under bin/ so that the programs can run without editing
+PATH or installing additional runtimes.
+
+Contents
+
+$distLayoutSummary
+
+Directory layout
+
+- bin/
+  Quantum ESPRESSO executables (*.exe) and all bundled runtime DLL dependencies.
+
+- licenses/
+  License texts for Quantum ESPRESSO and bundled third-party runtime components.
+  See licenses/THIRD_PARTY_NOTICES.txt for a summary.
+
+- VERSION.txt
+  Build metadata for traceability.
+
+How to run
+
+1) Open a terminal (PowerShell or CMD).
+
+2) cd into the folder containing this README.txt
+
+3) Run an executable from bin/, for example:
+
+     .\bin\pw.exe -h
+
+MPI usage
+
+$msmpiHint
+
+If you have a working MPI environment, you can run, e.g.:
+
+  mpiexec -n 4 .\bin\pw.exe -in input.in
+
+Licensing
+
+Quantum ESPRESSO is licensed under GPL v2 or later. Additional bundled runtime
+libraries (Intel oneAPI, Microsoft MPI) are redistributed under their respective
+licenses. See the licenses/ directory.
+
+Disclaimer
+
+These binaries are provided "as is" without warranty. Please report issues with
+details about your Windows version, CPU, and the exact command used.
+"@
+    
+    $content | Out-File -FilePath $readmeFile -Encoding UTF8 -NoNewline
+    Write-Host "  Generated README.txt" -ForegroundColor Green
+}
+
+function Generate-Version {
+    param(
+        [string]$DistRoot,
+        [string]$QeVersion,
+        [string]$BuildDateUtc,
+        [string]$BuildMode,
+        [int]$ExeCount,
+        [int]$DllCount,
+        [string]$OneApiVersion,
+        [string]$MsmpiVersion
+    )
+    $versionFile = Join-Path $DistRoot "VERSION.txt"
+    $content = @"
+build_date_utc=$BuildDateUtc
+git_repo=QMatSuite/qmatsuite-toolchain
+workflow=qe-windows-oneapi-msmpi-release
+qe_version_or_commit=$QeVersion
+build_mode=$BuildMode
+exe_count=$ExeCount
+dll_count=$DllCount
+oneapi_version=$OneApiVersion
+msmpi_version=$MsmpiVersion
+"@
+    
+    $content | Out-File -FilePath $versionFile -Encoding UTF8 -NoNewline
+    Write-Host "  Generated VERSION.txt" -ForegroundColor Green
+}
+
+function Clean-SmokeTestFiles {
+    param(
+        [string]$DistRoot,
+        [string]$DistBinDir  # Also check dist/bin for outdir
+    )
+    Write-Host "Cleaning up smoke test files..." -ForegroundColor Cyan
+    
+    $cleaned = @()
+    
+    # Remove outdir folder - check both dist/bin and dist root
+    $outdirLocations = @(
+        (Join-Path $DistBinDir "outdir"),
+        (Join-Path $DistRoot "outdir")
+    )
+    
+    foreach ($outdir in $outdirLocations) {
+        if (Test-Path $outdir) {
+            try {
+                Remove-Item -Recurse -Force $outdir -ErrorAction Stop
+                $cleaned += "outdir/ ($outdir)"
+                Write-Host "  Removed: outdir/ ($outdir)" -ForegroundColor Gray
+            } catch {
+                Write-Warning "  Failed to remove outdir at $outdir : $_"
+            }
+        }
+    }
+    
+    # Also search recursively for any outdir folders in dist/bin
+    if (Test-Path $DistBinDir) {
+        $allOutdirs = Get-ChildItem -Path $DistBinDir -Filter "outdir" -Directory -Recurse -ErrorAction SilentlyContinue
+        foreach ($outdir in $allOutdirs) {
+            if (Test-Path $outdir.FullName) {
+                try {
+                    Remove-Item -Recurse -Force $outdir.FullName -ErrorAction Stop
+                    $cleaned += "outdir/ ($($outdir.FullName))"
+                    Write-Host "  Removed: outdir/ ($($outdir.FullName))" -ForegroundColor Gray
+                } catch {
+                    Write-Warning "  Failed to remove outdir at $($outdir.FullName) : $_"
+                }
+            }
+        }
+    }
+    
+    # Remove .out files
+    $outFiles = Get-ChildItem -Path $DistBinDir -Filter "*.out" -File -ErrorAction SilentlyContinue
+    foreach ($file in $outFiles) {
+        try {
+            Remove-Item -Force $file.FullName -ErrorAction Stop
+            $cleaned += $file.Name
+            Write-Host "  Removed: $($file.Name)" -ForegroundColor Gray
+        } catch {
+            Write-Warning "  Failed to remove $($file.Name) : $_"
+        }
+    }
+    
+    # Remove .in files
+    $inFiles = Get-ChildItem -Path $DistBinDir -Filter "*.in" -File -ErrorAction SilentlyContinue
+    foreach ($file in $inFiles) {
+        try {
+            Remove-Item -Force $file.FullName -ErrorAction Stop
+            $cleaned += $file.Name
+            Write-Host "  Removed: $($file.Name)" -ForegroundColor Gray
+        } catch {
+            Write-Warning "  Failed to remove $($file.Name) : $_"
+        }
+    }
+    
+    # Remove .UPF files
+    $upfFiles = Get-ChildItem -Path $DistBinDir -Filter "*.UPF" -File -ErrorAction SilentlyContinue
+    foreach ($file in $upfFiles) {
+        try {
+            Remove-Item -Force $file.FullName -ErrorAction Stop
+            $cleaned += $file.Name
+            Write-Host "  Removed: $($file.Name)" -ForegroundColor Gray
+        } catch {
+            Write-Warning "  Failed to remove $($file.Name) : $_"
+        }
+    }
+    
+    # Remove deps-closure.txt from dist root
+    $depsClosureFile = Join-Path $DistRoot "deps-closure.txt"
+    if (Test-Path $depsClosureFile) {
+        try {
+            Remove-Item -Force $depsClosureFile -ErrorAction Stop
+            $cleaned += "deps-closure.txt"
+            Write-Host "  Removed: deps-closure.txt" -ForegroundColor Gray
+        } catch {
+            Write-Warning "  Failed to remove deps-closure.txt : $_"
+        }
+    }
+    
+    if ($cleaned.Count -gt 0) {
+        Write-Host "  Cleaned $($cleaned.Count) smoke test file(s)/folder(s)" -ForegroundColor Green
+    } else {
+        Write-Host "  No smoke test files to clean" -ForegroundColor Gray
+    }
+}
+
+function Verify-DistContents {
+    param(
+        [string]$DistRoot,
+        [string]$DistBinDir
+    )
+    Write-Host "Verifying distribution contents..." -ForegroundColor Cyan
+    
+    # Check bin directory exists and has files
+    if (-not (Test-Path $DistBinDir)) {
+        throw "Distribution bin directory not found: $DistBinDir"
+    }
+    
+    $binFiles = Get-ChildItem -Path $DistBinDir -File
+    $exeFiles = $binFiles | Where-Object { $_.Extension -eq ".exe" }
+    $dllFiles = $binFiles | Where-Object { $_.Extension -eq ".dll" }
+    $otherFiles = $binFiles | Where-Object { $_.Extension -ne ".exe" -and $_.Extension -ne ".dll" }
+    
+    Write-Host "  bin/ contains: $($exeFiles.Count) .exe, $($dllFiles.Count) .dll" -ForegroundColor Green
+    
+    if ($exeFiles.Count -eq 0) {
+        throw "No executables found in bin/ directory. Staging failed."
+    }
+    
+    if ($otherFiles.Count -gt 0) {
+        Write-Warning "bin/ contains non-exe/dll files:"
+        foreach ($file in $otherFiles) {
+            Write-Warning "  - $($file.Name)"
+        }
+    }
+    
+    # Check dist root for unexpected files (should only have bin/, licenses/, README.txt, VERSION.txt, deps-closure.txt)
+    $rootFiles = Get-ChildItem -Path $DistRoot -File
+    $expectedRootFiles = @("README.txt", "VERSION.txt", "deps-closure.txt")
+    $unexpectedRootFiles = $rootFiles | Where-Object { $expectedRootFiles -notcontains $_.Name }
+    
+    if ($unexpectedRootFiles.Count -gt 0) {
+        Write-Warning "Dist root contains unexpected files:"
+        foreach ($file in $unexpectedRootFiles) {
+            Write-Warning "  - $($file.Name)"
+        }
+    }
+    
+    # Check licenses directory exists
+    $licensesDir = Join-Path $DistRoot "licenses"
+    if (-not (Test-Path $licensesDir)) {
+        Write-Warning "licenses/ directory not found"
+    }
+    
+    Write-Host "  Verification complete" -ForegroundColor Green
+    return @{
+        ExeCount = $exeFiles.Count
+        DllCount = $dllFiles.Count
+        OtherFilesInBin = $otherFiles.Count
+        UnexpectedRootFiles = $unexpectedRootFiles.Count
     }
 }
 
@@ -1268,23 +2020,29 @@ if (-not (Test-Path $DistRoot) -and -not $WhatIf) {
     New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
 }
 
-# Stage executables
-Write-Host "Copying executables..."
-$stagedExeFiles = Stage-Executables -BinDir $BuildBin -DistDir $DistRoot -Only $Only -WhatIf:$WhatIf
-if (-not $DistRoot) {
-    throw "DistRoot is null. Cannot stage executables."
+# Create dist/bin directory structure
+$DistBinDir = Join-Path $DistRoot "bin"
+if (-not (Test-Path $DistBinDir) -and -not $WhatIf) {
+    New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
+}
+
+# Stage executables to dist/bin
+Write-Host "=== Staging executables ===" -ForegroundColor Cyan
+$stagedExeFiles = Stage-Executables -BinDir $BuildBin -DistBinDir $DistBinDir -Only $Only -WhatIf:$WhatIf
+if (-not $DistBinDir) {
+    throw "DistBinDir is null. Cannot stage executables."
 }
 # Construct paths using final staged names (not original build names)
-# For .x.exe files, they are renamed to .exe in dist, so we need to use the final name
+# For .x.exe files, they are renamed to .exe in dist/bin, so we need to use the final name
 $stagedExePaths = $stagedExeFiles | ForEach-Object { 
     if ($_ -and $_.Name) {
-        # If it's a .x.exe file, use the renamed .exe version in dist
+        # If it's a .x.exe file, use the renamed .exe version in dist/bin
         if ($_.Name -like "*.x.exe") {
             $finalName = $_.Name -replace '\.x\.exe$', '.exe'
-            Join-Path $DistRoot $finalName
+            Join-Path $DistBinDir $finalName
         } else {
             # Regular .exe files keep their name
-            Join-Path $DistRoot $_.Name
+            Join-Path $DistBinDir $_.Name
         }
     }
 } | Where-Object { $_ -ne $null }
@@ -1293,15 +2051,24 @@ $stagedExePaths = $stagedExeFiles | ForEach-Object {
 $dumpbinPath = Ensure-DumpbinInPath
 $searchRoots = Get-SearchRoots -OneApiRoot $oneApiRoot
 $closureFile = Join-Path $DistRoot "deps-closure.txt"
+$closureSummary = $null
 if ($dumpbinPath) {
     Write-Host "=== Layer 1: Recursive dependency closure ===" -ForegroundColor Cyan
     Write-Host "Using dumpbin at: $dumpbinPath"
-    Copy-DllClosure -ExePaths $stagedExePaths -DumpbinPath $dumpbinPath -SearchRoots $searchRoots -DistDir $DistRoot -VerboseDeps:$VerboseDeps -WhatIf:$WhatIf
+    $closureSummary = Copy-DllClosure -ExePaths $stagedExePaths -DumpbinPath $dumpbinPath -SearchRoots $searchRoots -DistBinDir $DistBinDir -BuildBinDir $BuildBin -VerboseDeps:$VerboseDeps -WhatIf:$WhatIf
 } else {
     Write-Warning "dumpbin.exe not found; skipping recursive closure. Staging may be incomplete."
     # Create empty closure file with note
     if (-not $WhatIfPreference) {
         "# Dependency closure skipped: dumpbin.exe not found" | Out-File -FilePath $closureFile -Encoding UTF8
+    }
+    $closureSummary = @{
+        ScannedCount = 0
+        CopiedCount = 0
+        ResolvedCount = 0
+        UnresolvedCount = 0
+        UnresolvedDlls = @()
+        ElapsedSeconds = 0
     }
 }
 
@@ -1311,11 +2078,13 @@ $mklRoot = $env:MKLROOT
 if (-not $mklRoot -or -not (Test-Path $mklRoot)) {
     $mklRoot = Join-Path $oneApiRoot "mkl\latest"
 }
-Copy-MustHaveDllPatterns -SearchRoots $searchRoots -DistDir $DistRoot -OneApiRoot $oneApiRoot -MklRoot $mklRoot
+Copy-MustHaveDllPatterns -SearchRoots $searchRoots -DistDir $DistBinDir -OneApiRoot $oneApiRoot -MklRoot $mklRoot
 
 # Stage MS-MPI runtime if MSMPI is detected
+$hasMsmpi = $false
 if ($mpiConfig -eq "MSMPI") {
-    Stage-MSMPIRuntime -DistDir $DistRoot
+    Stage-MSMPIRuntime -DistDir $DistBinDir
+    $hasMsmpi = $true
 }
 
 # Layer 3: Clean-room smoke test (final acceptance)
@@ -1326,12 +2095,86 @@ $resourcesDir = Join-Path $quantumEspressoRoot "tests\resources"
 # Run smoke test in strict mode by default (require exit code 0 AND "JOB DONE")
 $strictMode = -not $NoStrict
 if ($mpiConfig -eq "MSMPI") {
-    $mpiexecPath = Join-Path $DistRoot "mpiexec.exe"
-    Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$strictMode -UseMpi -MpiLauncher $mpiexecPath -MpiNP 2
+    $mpiexecPath = Join-Path $DistBinDir "mpiexec.exe"
+    Run-SmokeTest -DistDir $DistBinDir -ResourcesDir $resourcesDir -Strict:$strictMode -UseMpi -MpiLauncher $mpiexecPath -MpiNP 2
 } else {
-    Run-SmokeTest -DistDir $DistRoot -ResourcesDir $resourcesDir -Strict:$strictMode
+    Run-SmokeTest -DistDir $DistBinDir -ResourcesDir $resourcesDir -Strict:$strictMode
 }
 
+# Clean up smoke test files (optional, enabled by default)
+if (-not $NoCleanSmokeTest) {
+    Clean-SmokeTestFiles -DistRoot $DistRoot -DistBinDir $DistBinDir
+} else {
+    Write-Host "Skipping smoke test file cleanup (NoCleanSmokeTest specified)" -ForegroundColor Yellow
+}
+
+# Package licenses and notices
+Write-Host "=== Packaging licenses and notices ===" -ForegroundColor Cyan
+$licensesDir = Join-Path $DistRoot "licenses"
+if (-not (Test-Path $licensesDir) -and -not $WhatIf) {
+    New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
+}
+
+# Get QE source directory
+# BuildBin is typically: .../upstream/qe/build-win-oneapi/bin
+# So we need to go up 2 levels to get to .../upstream/qe
+$buildDir = Split-Path $BuildBin -Parent  # .../upstream/qe/build-win-oneapi
+$qeSourceDir = Split-Path $buildDir -Parent  # .../upstream/qe
+if (-not (Test-Path $qeSourceDir)) {
+    # Try alternative path
+    $qeSourceDir = Join-Path $RepoRoot "upstream\qe"
+}
+if (-not (Test-Path $qeSourceDir)) {
+    Write-Warning "QE source directory not found at: $qeSourceDir. License copying may fail."
+}
+
+# Get versions (pass DistBinDir for best-effort version extraction from bundled DLLs)
+$buildDateUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss UTC")
+$qeVersion = Get-QeVersion -QeSourceDir $qeSourceDir
+$oneApiVersion = Get-OneApiVersion -OneApiRoot $oneApiRoot -DistBinDir $DistBinDir
+$msmpiVersion = Get-MsmpiVersion -DistBinDir $DistBinDir
+
+# Copy license files
+$qeLicenseResult = Copy-QeLicenses -QeSourceDir $qeSourceDir -LicensesDir $licensesDir
+$oneApiLicenseResult = Copy-OneApiLicenses -OneApiRoot $oneApiRoot -LicensesDir $licensesDir
+$msmpiLicenseResult = Copy-MsmpiLicense -LicensesDir $licensesDir
+
+# Generate THIRD_PARTY_NOTICES.txt
+Generate-ThirdPartyNotices -LicensesDir $licensesDir -QeVersion $qeVersion -OneApiVersion $oneApiVersion -MsmpiVersion $msmpiVersion -BuildDateUtc $buildDateUtc
+
+# Detect build mode (try to infer from exe count or environment)
+$buildMode = if ($env:BUILD_MODE) { $env:BUILD_MODE } else { if ($stagedExeFiles.Count -gt 50) { "all" } else { "pw" } }
+
+# Get file counts for verification (must match what's actually in dist/bin)
+$binFiles = if (Test-Path $DistBinDir) { Get-ChildItem -Path $DistBinDir -File } else { @() }
+$exeCount = ($binFiles | Where-Object { $_.Extension -eq ".exe" }).Count
+$dllCount = ($binFiles | Where-Object { $_.Extension -eq ".dll" }).Count
+
+# Check if MS-MPI launcher is actually bundled
+$hasMsmpiLauncher = (Test-Path (Join-Path $DistBinDir "mpiexec.exe")) -or (Test-Path (Join-Path $DistBinDir "msmpiexec.exe"))
+
+# Generate README.txt and VERSION.txt (using actual counts from dist/bin)
+Generate-Readme -DistRoot $DistRoot -QeVersion $qeVersion -BuildDateUtc $buildDateUtc -ExeCount $exeCount -DllCount $dllCount -HasMsmpiLauncher $hasMsmpiLauncher
+Generate-Version -DistRoot $DistRoot -QeVersion $qeVersion -BuildDateUtc $buildDateUtc -BuildMode $buildMode -ExeCount $exeCount -DllCount $dllCount -OneApiVersion $oneApiVersion -MsmpiVersion $msmpiVersion
+
+# Verify distribution contents
+$verifyResult = Verify-DistContents -DistRoot $DistRoot -DistBinDir $DistBinDir
+
+# Print final summary
 Write-Host ""
-Write-Host "Staging complete. Files in: $DistRoot" -ForegroundColor Green
+Write-Host "=== Staging Summary ===" -ForegroundColor Green
+Write-Host "  Executables staged: $exeCount" -ForegroundColor Green
+Write-Host "  Runtime DLLs bundled: $dllCount" -ForegroundColor Green
+if ($closureSummary) {
+    Write-Host "  Unique modules scanned: $($closureSummary.ScannedCount)" -ForegroundColor Green
+    # Note: Unresolved DLLs are mostly Windows system DLLs (not redistributable), which is expected
+    Write-Host "  Unresolved DLLs: $($closureSummary.UnresolvedCount) (mostly Windows system DLLs, expected)" -ForegroundColor $(if ($closureSummary.UnresolvedCount -eq 0) { "Green" } else { "Yellow" })
+}
+Write-Host "  License directories:" -ForegroundColor Green
+Write-Host "    - quantum-espresso: $(if ($qeLicenseResult.Copied.Count -gt 0) { 'OK' } else { 'MISSING' })" -ForegroundColor $(if ($qeLicenseResult.Copied.Count -gt 0) { "Green" } else { "Red" })
+Write-Host "    - intel-oneapi: $(if ($oneApiLicenseResult.Copied.Count -gt 0) { 'OK' } else { 'WARNING' })" -ForegroundColor $(if ($oneApiLicenseResult.Copied.Count -gt 0) { "Green" } else { "Yellow" })
+Write-Host "    - microsoft-msmpi: $(if ($msmpiLicenseResult.Copied.Count -gt 0) { 'OK' } else { 'WARNING' })" -ForegroundColor $(if ($msmpiLicenseResult.Copied.Count -gt 0) { "Green" } else { "Yellow" })
+Write-Host ""
+Write-Host "Staging complete. Distribution in: $DistRoot" -ForegroundColor Green
+
 

@@ -313,11 +313,15 @@ jobs:
         uses: Azure/trusted-signing-action@v0
         with:
           endpoint: ${{ secrets.TRUSTEDSIGN_ENDPOINT }}
-          account: ${{ secrets.TRUSTEDSIGN_ACCOUNT }}
-          certificate-profile: ${{ secrets.TRUSTEDSIGN_CERT_PROFILE }}
-          files: |
-            dist/win-oneapi-msmpi/**/*.exe
-        continue-on-error: false
+          trusted-signing-account-name: ${{ secrets.TRUSTEDSIGN_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.TRUSTEDSIGN_CERT_PROFILE }}
+          files-folder: dist/win-oneapi-msmpi
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          continue-on-error: false
 
       - name: Create distribution zip
         run: |
