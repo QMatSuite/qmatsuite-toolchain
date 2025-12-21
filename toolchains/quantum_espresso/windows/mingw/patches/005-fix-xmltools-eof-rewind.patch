@@ -1,0 +1,13 @@
+--- a/upflib/xmltools.f90
++++ b/upflib/xmltools.f90
+@@ -1202,6 +1202,9 @@
+           if ( ntry == 1 ) go to 1
+        else
+           print *, 'end of file reached, tag '//trim(tag)//' not found'
++          ! Defensive fix: rewind to prevent "Read past ENDFILE record" crash
++          ! This prevents the hard crash but does not fix the root cause
++          rewind(xmlunit)
+        end if
+     else
+        print *, 'xmlr_opentag: severe parsing error'
+

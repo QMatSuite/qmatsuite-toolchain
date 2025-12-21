@@ -1,0 +1,75 @@
+--- a/upflib/read_upf_new.f90
++++ b/upflib/read_upf_new.f90
+@@ -156,19 +156,30 @@
+     USE upf_utils, ONLY: capital
+     IMPLICIT NONE
+     CHARACTER(LEN=*) :: strin
+     !
+-    INTEGER :: n
++    INTEGER :: n, lt
+     CHARACTER(LEN=:), ALLOCATABLE :: strout
+     !
+     ! Guard: detect empty input (would cause empty tag bug)
+-    IF (LEN_TRIM(strin) == 0) THEN
++    lt = LEN_TRIM(strin)
++    IF (lt == 0) THEN
+        WRITE(stdout,'("FATAL: capitalize_if_v2 called with empty string")')
+        strout = ''  ! Return empty but caller should check
+        RETURN
+     END IF
+     !
+     IF ( v2 ) THEN
+-       strout = ''
+-       DO n = 1,LEN_TRIM(strin)
+-          strout = strout // capital(strin(n:n))
+-       END DO
++       ! Fix for MinGW gfortran: explicitly allocate and build capitalized string
++       ! Avoid potential issues with allocatable character concatenation in loop
++       ALLOCATE(CHARACTER(LEN=lt) :: strout)
++       DO n = 1, lt
++          strout(n:n) = capital(strin(n:n))
++       END DO
+     ELSE
+        strout = TRIM(strin)
+     END IF
+     !
++    ! Final safety check: ensure result is non-empty (should never fail for non-empty input)
++    IF (LEN_TRIM(strout) == 0 .AND. lt > 0) THEN
++       WRITE(stdout,'("FATAL: capitalize_if_v2 produced empty string from non-empty input")')
++       WRITE(stdout,'("  Input: [",A,"], v2=",L1)') strin, v2
++       ! Fallback: return original string to prevent crash
++       strout = TRIM(strin)
++    END IF
++    !
+   END FUNCTION capitalize_if_v2
+   !--------------------------------------------------------
+   SUBROUTINE read_pp_header_schema ( upf )
+@@ -219,9 +230,24 @@
+     IMPLICIT NONE
+     TYPE(pseudo_upf), INTENT(INOUT) :: upf ! the pseudo data
+     !
+     CHARACTER(LEN=1) :: dummy
++    CHARACTER(LEN=:), ALLOCATABLE :: tag
+     !
+-    CALL xmlr_readtag ( capitalize_if_v2('pp_header'), dummy )
++    ! Fix for MinGW gfortran: store result of capitalize_if_v2 in local variable
++    ! to avoid allocatable character conversion issues when passing directly to xmlr_readtag
++    tag = capitalize_if_v2('pp_header')
++    !
++    ! Debug: print tag before call (visible even when redirected)
++    WRITE(stdout,'("DEBUG read_pp_header_v2: tag=[",A,"], len_trim=",I0,", v2=",L1)') &
++         tag, LEN_TRIM(tag), v2
++    FLUSH(stdout)
++    !
++    ! Safety check: ensure tag is non-empty (defensive programming)
++    IF (LEN_TRIM(tag) == 0) THEN
++       WRITE(stdout,'("FATAL: capitalize_if_v2 returned empty string for input ''pp_header''")')
++       WRITE(stdout,'("  v2 flag = ",L1)') v2
++       ERROR STOP 'read_pp_header_v2: empty tag from capitalize_if_v2'
++    END IF
++    !
++    CALL xmlr_readtag ( tag, dummy )
+     CALL get_attr ('generated', upf%generated)
+     CALL get_attr ('author', upf%author)
+     CALL get_attr ('date', upf%date)
+

@@ -1,0 +1,234 @@
+--- a/upflib/xmltools.f90
++++ b/upflib/xmltools.f90
+@@ -740,10 +740,25 @@
+   end function r2c
+   
+   function i2c (i) result (c)
++    !
++    ! MinGW-safe version: returns fixed-length CHARACTER instead of allocatable
++    ! to avoid empty string bugs on MinGW gfortran
++    !
+     integer, intent(in) :: i
+-    character(len=:), allocatable :: c
+-    character(len=11) :: caux
++    character(len=32) :: c  ! Fixed length, large enough for any integer
++    character(len=32) :: caux
++    integer :: lt
+     !
+-    write(caux,'(i11)') i
++    ! Write integer to fixed buffer
++    write(caux,'(I0)') i
+     c = trim(adjustl(caux))
+     !
++    ! Safety check: ensure result is non-empty for valid input
++    lt = len_trim(c)
++    if (lt == 0) then
++       print '("FATAL i2c: conversion of integer ",I0," resulted in empty string")', i
++       print '("  This indicates a compiler bug or internal write failure")'
++       ERROR STOP 'i2c: empty result'
++    end if
++    !
+   end function i2c
+   
+--- a/upflib/read_upf_new.f90
++++ b/upflib/read_upf_new.f90
+@@ -356,6 +356,7 @@
+     INTEGER :: nb, ind, l, j
+     CHARACTER(LEN=9) :: tag
+     CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     real(dp), allocatable :: vnl(:)
+     !
+     IF ( .NOT. upf%has_so ) then
+@@ -375,7 +376,9 @@
+             ! NOTA BENE: v2 format follows available PP files, written 
+             ! using original write_upf_v2; not FoX-based write_upf_v2
+             IF ( nb - 1 == upf%lloc ) CYCLE
+-            tag = 'PP_VNL.'//i2c(nb-1)
++            ! MinGW-safe tag construction
++            WRITE(nbuf,'(I0)') nb-1
++            tag = 'PP_VNL.' // TRIM(nbuf)
+          END IF
+          CALL xmlr_readtag( tag, vnl(:) )
+          CALL get_attr ( 'index', ind )
+@@ -400,6 +403,7 @@
+     INTEGER :: nb, ind, l, l_, ln, lm, mb, nmb
+     CHARACTER(LEN=15) :: tag
+     CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf, nbuf1, nbuf2, nbuf3  ! For MinGW-safe tag construction
+     REAL(dp), ALLOCATABLE :: aux(:)
+     !
+     IF ( upf%nbeta == 0 ) RETURN
+@@ -448,7 +452,20 @@
+     DO nb = 1,upf%nbeta
+        !
+        IF ( v2 ) THEN
+-          tag = 'PP_BETA.'//i2c(nb)
++          ! MinGW-safe tag construction: use direct WRITE instead of i2c()
++          ! This avoids allocatable character issues on MinGW gfortran
++          WRITE(nbuf,'(I0)') nb
++          tag = 'PP_BETA.' // TRIM(nbuf)
++          ! Safety check: ensure tag is non-empty
++          IF (LEN_TRIM(tag) == 0) THEN
++             WRITE(stdout,'("FATAL read_pp_nonlocal: nb=",I0,", constructed tag is empty")') nb
++             ERROR STOP 'read_pp_nonlocal: empty tag after construction'
++          END IF
++          ! Optional debug output (controlled by QE_UPF_DEBUG env var)
++          IF (LEN_TRIM(GET_ENVIRONMENT_VARIABLE('QE_UPF_DEBUG')) > 0) THEN
++             WRITE(stdout,'("DEBUG read_pp_nonlocal: nb=",I0,", constructed tag=[",A,"]")') &
++                  nb, trim(tag)
++             FLUSH(stdout)
++          END IF
+        ELSE
+           tag = 'pp_beta'
+        END IF
+@@ -612,7 +629,10 @@
+                    IF(isnull) CYCLE loop_on_l
+                    IF ( v2 ) THEN
+                       ! MinGW-safe tag construction
+-                      tag = 'PP_QIJL.'//i2c(nb)//'.'//i2c(mb)//'.'//i2c(l)
++                      WRITE(nbuf1,'(I0)') nb
++                      WRITE(nbuf2,'(I0)') mb
++                      WRITE(nbuf3,'(I0)') l
++                      tag = 'PP_QIJL.' // TRIM(nbuf1) // '.' // TRIM(nbuf2) // '.' // TRIM(nbuf3)
+                    ELSE
+                       tag = 'pp_qijl'
+                   END IF
+@@ -645,7 +665,10 @@
+                 IF(isnull) CYCLE loop_on_mb
+                 IF ( v2 ) THEN
+                    ! MinGW-safe tag construction
+-                   tag = 'PP_QIJ.'//i2c(nb)//'.'//i2c(mb)
++                   WRITE(nbuf1,'(I0)') nb
++                   WRITE(nbuf2,'(I0)') mb
++                   tag = 'PP_QIJ.' // TRIM(nbuf1) // '.' // TRIM(nbuf2)
+                 ELSE
+                    tag = 'pp_qij'
+                 END IF
+@@ -686,6 +709,7 @@
+     INTEGER :: nw, ind, l
+     CHARACTER(LEN=9) :: tag
+     CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF ( upf%nwfc == 0 ) RETURN
+     !
+@@ -701,7 +725,20 @@
+     DO nw=1,upf%nwfc
+        IF ( v2 ) THEN
+-          tag = 'PP_CHI.'//i2c(nw)
++          ! MinGW-safe tag construction: use direct WRITE instead of i2c()
++          WRITE(nbuf,'(I0)') nw
++          tag = 'PP_CHI.' // TRIM(nbuf)
++          ! Safety check: ensure tag is non-empty
++          IF (LEN_TRIM(tag) == 0) THEN
++             WRITE(stdout,'("FATAL read_pp_pswfc: nw=",I0,", constructed tag is empty")') nw
++             ERROR STOP 'read_pp_pswfc: empty tag after construction'
++          END IF
++          ! Optional debug output (controlled by QE_UPF_DEBUG env var)
++          IF (LEN_TRIM(GET_ENVIRONMENT_VARIABLE('QE_UPF_DEBUG')) > 0) THEN
++             WRITE(stdout,'("DEBUG read_pp_pswfc: nw=",I0,", constructed tag=[",A,"]")') &
++                  nw, trim(tag)
++             FLUSH(stdout)
++          END IF
+        ELSE
+           tag = 'pp_chi'
+        END IF
+@@ -786,6 +822,7 @@
+     INTEGER :: nb, mb
+     CHARACTER(LEN=15) :: tag
+     CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF ( upf%has_wfc ) THEN
+        !
+@@ -795,7 +832,9 @@
+        !
+        DO nb = 1, upf%nbeta
+           IF ( v2 ) THEN
+-             tag = 'PP_AEWFC.'//i2c(nb)
++             ! MinGW-safe tag construction
++             WRITE(nbuf,'(I0)') nb
++             tag = 'PP_AEWFC.' // TRIM(nbuf)
+           ELSE
+              tag = 'pp_aewfc'
+           END IF
+@@ -806,7 +845,9 @@
+          ALLOCATE (upf%paw%aewfc_rel(1:upf%mesh,upf%nbeta) )
+          DO nb = 1, upf%nbeta
+             IF ( v2 ) THEN
+-                tag = 'PP_AEWFC_REL.'//i2c(nb)
++                ! MinGW-safe tag construction
++                WRITE(nbuf,'(I0)') nb
++                tag = 'PP_AEWFC_REL.' // TRIM(nbuf)
+             ELSE
+                 tag = 'pp_aewfc_rel'
+             END IF
+@@ -838,7 +879,9 @@
+       ALLOCATE (upf%pswfc(1:upf%mesh,upf%nbeta) )
+       DO nb = 1, upf%nbeta
+          IF ( v2 ) THEN
+-             tag = 'PP_PSWFC.'//i2c(nb)
++             ! MinGW-safe tag construction
++             WRITE(nbuf,'(I0)') nb
++             tag = 'PP_PSWFC.' // TRIM(nbuf)
+          ELSE
+              tag = 'pp_pswfc'
+          END IF
+@@ -890,6 +933,7 @@
+     INTEGER, INTENT(INOUT) :: ierr
+     INTEGER :: nw, nb, nn
+     CHARACTER(LEN=1) :: dummy
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF ( .NOT. v2 .OR. .NOT. upf%has_so ) RETURN
+     !
+     CALL xmlr_opentag( 'PP_SPIN_ORB' )
+     DO nw = 1,upf%nwfc
+-       CALL xmlr_readtag( 'PP_RELWFC.'//i2c(nw), dummy )
++       ! MinGW-safe tag construction
++       WRITE(nbuf,'(I0)') nw
++       CALL xmlr_readtag( 'PP_RELWFC.' // TRIM(nbuf), dummy )
+        CALL get_attr( 'index' , nb )
+        ! not-so-strict test: index absent or incorrect in some UPF v.2 files
+        IF ( .NOT. v2 .AND. nb /= nw ) THEN
+@@ -913,7 +957,9 @@
+     ENDDO
+     !
+     DO nb = 1,upf%nbeta
+-       CALL xmlr_readtag( 'PP_RELBETA.'//i2c(nb), dummy, ierr )
++       ! MinGW-safe tag construction
++       WRITE(nbuf,'(I0)') nb
++       CALL xmlr_readtag( 'PP_RELBETA.' // TRIM(nbuf), dummy, ierr )
+        !
+        ! existing PP files may have pp_relbeta first, pp_relwfc later,
+        ! but also the other way round
+@@ -1024,6 +1070,7 @@
+     INTEGER :: nb, mb
+     CHARACTER(LEN=24) :: tag
+     CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF ( .NOT. upf%has_gipaw ) RETURN
+     !
+@@ -1048,7 +1095,9 @@
+     DO nb = 1,upf%gipaw_ncore_orbitals
+        IF ( v2 ) THEN
+-          tag = "PP_GIPAW_CORE_ORBITAL."//i2c(nb)
++          ! MinGW-safe tag construction
++          WRITE(nbuf,'(I0)') nb
++          tag = "PP_GIPAW_CORE_ORBITAL." // TRIM(nbuf)
+        ELSE
+           tag = 'pp_gipaw_core_orbital'
+       END IF
+@@ -1111,7 +1160,9 @@
+       DO nb = 1,upf%gipaw_wfs_nchannels
+          IF ( v2 ) THEN
+-            tag = "PP_GIPAW_ORBITAL."//i2c(nb)
++            ! MinGW-safe tag construction
++            WRITE(nbuf,'(I0)') nb
++            tag = "PP_GIPAW_ORBITAL." // TRIM(nbuf)
+          ELSE
+             tag = 'pp_gipaw_orbital'
+          END IF
+
