@@ -184,7 +184,8 @@ Configure QE using the traditional `./configure` script with production-safe fla
 
 ```bash
 # Production-safe compiler flags (see "Compiler Flags Reference" below)
-export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
+# Might be useful if problem with stack overflow: FFLAGS = -fmax-stack-var-size=0
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz "
 export CFLAGS="-O2 -Wno-incompatible-pointer-types"
 export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
 export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5/artifacts"
