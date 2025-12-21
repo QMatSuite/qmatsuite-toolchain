@@ -16,7 +16,9 @@ param(
     [switch]$NoMpi,                    # If specified, build serial QE without MPI
     [string]$QeSourceDir = "upstream/qe",  # Path to QE source directory (relative to repo root)
     [ValidateSet('Internal', 'Intel_FFTW3', 'Intel_DFTI', 'AUTO')]
-    [string]$FftwVendor = "Intel_DFTI"  # FFT backend vendor (default: Intel_FFTW3)
+    [string]$FftwVendor = "Intel_DFTI",  # FFT backend vendor (default: Intel_DFTI)
+    [ValidateSet('pw', 'all')]
+    [string]$MakeTarget = "pw"  # Build target: 'pw' (pw only, default) or 'all' (all executables)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -168,6 +170,12 @@ $mpiFlag = if ($NoMpi) { "OFF" } else { "ON" }
 Write-Host "Step 2: Configuration" -ForegroundColor Yellow
 Write-Host "  MPI: $mpiFlag"
 Write-Host "  FFT Vendor: $FftwVendor"
+Write-Host "  Build Target: $MakeTarget" -ForegroundColor Cyan
+if ($MakeTarget -eq "all") {
+    Write-Host "  Mode: Building ALL QE executables" -ForegroundColor Green
+} else {
+    Write-Host "  Mode: Building pw only (default)" -ForegroundColor Green
+}
 Write-Host ""
 
 # Step 2b: Validate MS-MPI installation when MPI is enabled
@@ -591,12 +599,15 @@ if ($mpiFlag -eq "ON") {
 $cmakeConfigure = $cmakeConfigure -join " "
 
 # Build CMake build command
-# Build only the 'pw' target initially (can be extended later)
+# Build target based on MakeTarget parameter (pw or all)
 # Use --verbose to show compilation commands in real-time
+$buildTarget = if ($MakeTarget -eq "all") { "all" } else { "pw" }
+Write-Host "Build target: $buildTarget" -ForegroundColor Cyan
+
 $cmakeBuild = @(
     $cmakeExe,
     "--build", "`"$($BuildDir)`"",     # Build directory
-    "--target", "pw",                  # Target to build (pw.x executable)
+    "--target", $buildTarget,          # Target to build (pw.x executable or all)
     "--config", "Release",             # Configuration (for multi-config generators)
     "--parallel",                       # Use parallel build
     "--verbose"                         # Show compilation commands in real-time

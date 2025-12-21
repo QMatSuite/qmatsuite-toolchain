@@ -252,10 +252,16 @@ function Stage-Executables {
     if ($Only) {
         $normalized = $Only | ForEach-Object { if ($_ -like "*.exe") { $_ } else { "$_.exe" } }
         $exeFiles = $exeFiles | Where-Object { $normalized -contains $_.Name }
+        Write-Host "Filtering executables (Only mode): $($normalized -join ', ')" -ForegroundColor Cyan
+    } else {
+        Write-Host "Staging ALL executables (no filter)" -ForegroundColor Cyan
     }
     if (-not $exeFiles) {
-        throw "No executables found to stage. Check build output or -Only filters."
+        throw "No executables found to stage. Check build output or -Only filters. BinDir: $BinDir"
     }
+    
+    $exeCount = ($exeFiles | Measure-Object).Count
+    Write-Host "Found $exeCount executable(s) to stage" -ForegroundColor Green
     
     # Separate .x.exe files from regular .exe files
     $xExeFiles = $exeFiles | Where-Object { $_.Name -like "*.x.exe" }
@@ -292,6 +298,23 @@ function Stage-Executables {
         }
         Write-Host "  exe: $($exe.Name)"
     }
+    
+    # Print summary with examples
+    $stagedCount = ($xExeFiles | Measure-Object).Count + ($regularExeFiles | Measure-Object).Count
+    Write-Host ""
+    Write-Host "Staged $stagedCount executable(s) total" -ForegroundColor Green
+    if ($stagedCount -gt 0) {
+        Write-Host "Examples of staged executables:" -ForegroundColor Cyan
+        $examples = $exeFiles | Select-Object -First 5
+        foreach ($ex in $examples) {
+            $finalName = if ($ex.Name -like "*.x.exe") { $ex.Name -replace '\.x\.exe$', '.exe' } else { $ex.Name }
+            Write-Host "  - $finalName" -ForegroundColor Gray
+        }
+        if ($stagedCount -gt 5) {
+            Write-Host "  ... and $($stagedCount - 5) more" -ForegroundColor Gray
+        }
+    }
+    Write-Host ""
     
     return $exeFiles
 }

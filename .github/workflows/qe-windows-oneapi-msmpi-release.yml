@@ -1,0 +1,414 @@
+name: QE Windows oneAPI MS-MPI Release Build
+
+# Required secrets (set in repository settings):
+# - AZURE_CLIENT_ID: Azure service principal client ID for Trusted Signing
+# - AZURE_TENANT_ID: Azure tenant ID
+# - AZURE_SUBSCRIPTION_ID: Azure subscription ID
+# - TRUSTEDSIGN_ENDPOINT: Trusted Signing endpoint URL
+# - TRUSTEDSIGN_ACCOUNT: Trusted Signing account name
+# - TRUSTEDSIGN_CERT_PROFILE: Certificate profile name for signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'Build mode: pw (pw only) or all (all executables)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - pw
+          - all
+      clean_compile:
+        description: 'Force clean compile (skip cache, delete build directories)'
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: 'Release tag/name (optional; if empty, auto-generated from date+sha)'
+        required: false
+        default: ''
+        type: string
+      release_draft:
+        description: 'Create as draft release'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: windows-oneapi-qe-msmpi-release-${{ github.ref }}
+  cancel-in-progress: false  # Don't cancel release builds
+
+defaults:
+  run:
+    shell: pwsh
+
+permissions:
+  id-token: write  # Required for OIDC and artifact attestation
+  attestations: write  # Required for GitHub artifact attestation
+  contents: write  # Required for creating releases and uploading assets
+
+jobs:
+  build_stage:
+    # Job A: Build and stage QE executables (cachable)
+    runs-on: windows-latest
+    env:
+      ONEAPI_ROOT: 'C:\Program Files (x86)\Intel\oneAPI'
+      QE_ROOT: '${{ github.workspace }}\toolchains\quantum_espresso\windows\oneapi'
+      QE_SRC: '${{ github.workspace }}\toolchains\quantum_espresso\windows\oneapi\upstream\qe'
+      BUILD_MODE: '${{ inputs.build_mode }}'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache QE source/build
+        if: inputs.clean_compile != true
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchains/quantum_espresso/windows/oneapi/upstream/qe
+          key: qe-oneapi-msmpi-release-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}-${{ github.sha }}
+          restore-keys: |
+            qe-oneapi-msmpi-release-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}-
+            qe-oneapi-msmpi-release-${{ runner.os }}-
+
+      - name: Cache oneAPI installation
+        id: cache-oneapi-install
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\Program Files (x86)\Intel\oneAPI\compiler
+            C:\Program Files (x86)\Intel\oneAPI\mkl
+            C:\Program Files (x86)\Intel\oneAPI\setvars.bat
+            C:\Program Files (x86)\Intel\oneAPI\setvars-vcvarsall.bat
+          key: oneapi-install-2025.3.0-${{ runner.os }}-cpp-dpcpp-common-ifort-compiler-mkl-devel
+          restore-keys: |
+            oneapi-install-2025.3.0-${{ runner.os }}-
+            oneapi-install-${{ runner.os }}-
+
+      - name: Verify cached oneAPI installation
+        id: verify-install
+        continue-on-error: true
+        if: steps.cache-oneapi-install.outputs.cache-hit == 'true'
+        run: |
+          Write-Host "oneAPI installation restored from cache, verifying..."
+          if (-not (Test-Path "$env:ONEAPI_ROOT\setvars.bat")) {
+            Write-Warning "Cached oneAPI installation incomplete: setvars.bat not found"
+            exit 1
+          }
+          $mklPath = Join-Path $env:ONEAPI_ROOT "mkl\latest"
+          if (-not (Test-Path $mklPath)) {
+            Write-Warning "Cached oneAPI installation incomplete: MKL not found at $mklPath"
+            exit 1
+          }
+          Write-Host "Verified: oneAPI installation is complete and valid"
+
+      - name: Cache oneAPI installer
+        id: cache-installer
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true' || steps.verify-install.outcome != 'success'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .github/cache/oneapi-installer
+          key: oneapi-installer-2025.3.0-${{ runner.os }}
+          restore-keys: |
+            oneapi-installer-${{ runner.os }}-
+
+      - name: Install oneAPI (compilers + MKL) via offline installer
+        if: steps.cache-oneapi-install.outputs.cache-hit != 'true' || steps.verify-install.outcome != 'success'
+        run: |
+          $url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/3a871580-f839-46ed-aeae-685084127279/intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
+          $cacheDir = ".github/cache/oneapi-installer"
+          $cachedInstaller = Join-Path $cacheDir "intel-oneapi-hpc-toolkit-2025.3.0.378_offline.exe"
+          $installerExe = Join-Path $env:RUNNER_TEMP "oneapi_hpc_installer.exe"
+          $extractDir = Join-Path $env:RUNNER_TEMP "oneapi_extracted"
+          $configFile = Join-Path $env:RUNNER_TEMP "oneapi_install_config.ini"
+          
+          if (Test-Path $cachedInstaller) {
+            Write-Host "Using cached oneAPI installer from $cachedInstaller"
+            Copy-Item -Path $cachedInstaller -Destination $installerExe -Force
+          } else {
+            Write-Host "Downloading oneAPI HPC Kit installer from $url"
+            New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+            Invoke-WebRequest -Uri $url -OutFile $installerExe
+            Copy-Item -Path $installerExe -Destination $cachedInstaller -Force
+            Write-Host "Cached installer for future runs"
+          }
+          
+          Write-Host "Extracting installer to $extractDir"
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          $extractLog = Join-Path $env:RUNNER_TEMP "extract.log"
+          
+          $extractProc = Start-Process -FilePath $installerExe -ArgumentList "-s", "-x", "-f", $extractDir, "--log", $extractLog -Wait -PassThru -NoNewWindow
+          if ($extractProc.ExitCode -ne 0) {
+            Write-Host "Extraction log contents:"
+            if (Test-Path $extractLog) {
+              Get-Content $extractLog -Tail 50
+            }
+            Write-Error "Extraction failed with exit code $($extractProc.ExitCode)"
+            exit 1
+          }
+          
+          Write-Host "Extraction completed successfully"
+          
+          Write-Host "Creating install config file for compilers + MKL"
+          $configContent = @(
+            "eula=accept",
+            "components=intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.ifort-compiler:intel.oneapi.win.mkl.devel",
+            'p="NEED_VS2017_INTEGRATION=0 NEED_VS2019_INTEGRATION=0 NEED_VS2022_INTEGRATION=0"'
+          )
+          $configContent | Out-File -FilePath $configFile -Encoding ASCII
+          
+          $bootstrapper = Join-Path $extractDir "bootstrapper.exe"
+          if (-not (Test-Path $bootstrapper)) {
+            Write-Error "Bootstrapper not found at $bootstrapper"
+            exit 1
+          }
+          
+          Write-Host "Running bootstrapper to install compilers + MKL..."
+          $installLogDir = Join-Path $env:RUNNER_TEMP "install_logs"
+          New-Item -ItemType Directory -Path $installLogDir -Force | Out-Null
+          
+          $installProc = Start-Process -FilePath $bootstrapper -ArgumentList "-s", "--action", "install", "--config", $configFile, "--log-dir", $installLogDir, "--eula", "accept" -Wait -PassThru -NoNewWindow
+          if ($installProc.ExitCode -ne 0) {
+            Write-Host "Installation log contents:"
+            Get-ChildItem $installLogDir -Filter "*.log" | ForEach-Object {
+              Write-Host "Log file: $($_.Name)"
+              Get-Content $_.FullName -Tail 30
+            }
+            Write-Error "oneAPI installation failed with exit code $($installProc.ExitCode)"
+            exit 1
+          }
+          
+          Write-Host "oneAPI installation completed successfully"
+
+      - name: Install MS-MPI Runtime and SDK
+        run: |
+          Write-Host "Installing MS-MPI Runtime and SDK via winget..."
+          winget install -e --id Microsoft.msmpi --accept-source-agreements --accept-package-agreements
+          winget install -e --id Microsoft.msmpisdk --accept-source-agreements --accept-package-agreements
+          
+          $msmpiBin = "C:\Program Files\Microsoft MPI\Bin"
+          $msmpiSdk = "C:\Program Files (x86)\Microsoft SDKs\MPI"
+          if (-not (Test-Path $msmpiBin)) {
+            Write-Error "MS-MPI Runtime not found at $msmpiBin"
+            exit 1
+          }
+          if (-not (Test-Path $msmpiSdk)) {
+            Write-Error "MS-MPI SDK not found at $msmpiSdk"
+            exit 1
+          }
+          
+          $currentPath = $env:PATH
+          $newPath = "$msmpiBin;$currentPath"
+          "PATH=$newPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "MS-MPI Runtime and SDK installed successfully"
+
+      - name: Set MKL environment for CMake
+        run: |
+          function Resolve-MklRoot {
+            param([string]$OneApiRoot)
+            if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) { return $env:MKLROOT }
+            $candidate = Join-Path $OneApiRoot "mkl\latest"
+            if (Test-Path $candidate) { return $candidate }
+            $versions = Get-ChildItem -Path (Join-Path $OneApiRoot "mkl") -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+            foreach ($v in $versions) {
+              $cmakePath = Join-Path $v.FullName "lib\cmake\mkl"
+              if (Test-Path $cmakePath) { return $v.FullName }
+            }
+            return $null
+          }
+
+          $mklRoot = Resolve-MklRoot -OneApiRoot $env:ONEAPI_ROOT
+          if (-not $mklRoot) {
+            Write-Error "MKL not found under $env:ONEAPI_ROOT\mkl. Ensure oneAPI Base/HPC kit with MKL is installed."
+            exit 1
+          }
+
+          $env:MKLROOT = $mklRoot
+          $prefix = Join-Path $mklRoot "lib\cmake\mkl"
+          if (-not (Test-Path $prefix)) {
+            Write-Error "MKL CMake package dir not found at $prefix"
+            exit 1
+          }
+
+          $env:CMAKE_PREFIX_PATH = "$prefix;$env:CMAKE_PREFIX_PATH"
+
+          "MKLROOT=$mklRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CMAKE_PREFIX_PATH=$($env:CMAKE_PREFIX_PATH)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install build tools (cmake, ninja)
+        run: |
+          choco install --no-progress -y cmake ninja
+
+      - name: Clean build directory (if clean_compile requested)
+        if: inputs.clean_compile == true
+        run: |
+          $buildDir = Join-Path $env:QE_SRC "build-win-oneapi-msmpi"
+          if (Test-Path $buildDir) {
+            Write-Host "Cleaning build directory: $buildDir"
+            Remove-Item -Recurse -Force $buildDir
+            Write-Host "Build directory cleaned"
+          } else {
+            Write-Host "Build directory does not exist, nothing to clean"
+          }
+
+      - name: Refresh QE source (no patch)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1" -NoPatch
+
+      - name: Apply QE patches
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\apply_qe_patches.ps1" `
+            -QeDir "$env:QE_SRC" `
+            -PatchDir "$env:QE_ROOT\patches"
+
+      - name: Build QE (oneAPI, MS-MPI enabled)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" `
+            -MakeTarget "$env:BUILD_MODE"
+
+      - name: Stage QE executables and runtime DLLs
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\stage_qe_windows.ps1" `
+            -BuildDir "upstream\qe\build-win-oneapi-msmpi" `
+            -DistDir "dist\win-oneapi-msmpi"
+
+      - name: Upload staged QE distribution artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qe-win-oneapi-msmpi-dist-${{ github.sha }}-${{ inputs.build_mode }}
+          path: toolchains/quantum_espresso/windows/oneapi/dist/win-oneapi-msmpi/**
+          retention-days: 7
+
+  sign_package_attest_release:
+    # Job B: Sign, package, attest, and release (fast reruns, no compilation)
+    needs: build_stage
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download staged QE distribution artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: qe-win-oneapi-msmpi-dist-${{ github.sha }}-${{ inputs.build_mode }}
+          path: dist/win-oneapi-msmpi
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
+
+      - name: Sign all executables with Trusted Signing
+        uses: Azure/trusted-signing-action@v1
+        with:
+          endpoint: ${{ secrets.TRUSTEDSIGN_ENDPOINT }}
+          account: ${{ secrets.TRUSTEDSIGN_ACCOUNT }}
+          certificate-profile: ${{ secrets.TRUSTEDSIGN_CERT_PROFILE }}
+          files: |
+            dist/win-oneapi-msmpi/**/*.exe
+        continue-on-error: false
+
+      - name: Create distribution zip
+        run: |
+          $distDir = "dist/win-oneapi-msmpi"
+          $zipName = "qe-windows-oneapi-msmpi-${{ inputs.build_mode }}-${{ github.sha }}.zip"
+          $zipPath = Join-Path $env:RUNNER_TEMP $zipName
+          
+          Write-Host "Creating zip archive: $zipPath"
+          Write-Host "Source directory: $distDir"
+          
+          if (-not (Test-Path $distDir)) {
+            Write-Error "Distribution directory not found: $distDir"
+            exit 1
+          }
+          
+          # Get all files in dist directory
+          $files = Get-ChildItem -Path $distDir -Recurse -File
+          Write-Host "Found $($files.Count) files to archive"
+          
+          # Create zip using .NET compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($distDir, $zipPath)
+          
+          Write-Host "Zip archive created: $zipPath"
+          Write-Host "Archive size: $((Get-Item $zipPath).Length) bytes"
+          
+          # Set output for next steps
+          "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Generate SHA256 checksum
+        run: |
+          $zipPath = $env:ZIP_PATH
+          $checksumFile = Join-Path $env:RUNNER_TEMP "checksums.txt"
+          
+          Write-Host "Generating SHA256 checksum for: $zipPath"
+          
+          $hash = Get-FileHash -Path $zipPath -Algorithm SHA256
+          $checksumLine = "$($hash.Hash)  $env:ZIP_NAME"
+          
+          $checksumLine | Out-File -FilePath $checksumFile -Encoding ASCII -NoNewline
+          
+          Write-Host "Checksum: $($hash.Hash)"
+          Write-Host "Checksum file: $checksumFile"
+          
+          "CHECKSUM_FILE=$checksumFile" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ZIP_PATH }}
+          push-to-registry: false
+
+      - name: Determine release name
+        id: release_name
+        run: |
+          $releaseTag = "${{ inputs.release_tag }}"
+          if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            $date = Get-Date -Format "yyyyMMdd"
+            $shortSha = "${{ github.sha }}".Substring(0, 7)
+            $buildMode = "${{ inputs.build_mode }}"
+            $releaseTag = "QE-7.5-win-oneapi-msmpi-$buildMode-$date-$shortSha"
+          }
+          Write-Host "Release name: $releaseTag"
+          "RELEASE_NAME=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "name=$releaseTag" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_name.outputs.name }}
+          name: ${{ env.RELEASE_NAME }}
+          draft: ${{ inputs.release_draft }}
+          files: |
+            ${{ env.ZIP_PATH }}
+            ${{ env.CHECKSUM_FILE }}
+          body: |
+            Quantum ESPRESSO 7.5 Windows oneAPI MS-MPI Build
+            
+            **Build Mode:** ${{ inputs.build_mode }}
+            **Commit:** ${{ github.sha }}
+            **Build Date:** ${{ github.event.head_commit.timestamp || github.run_started_at }}
+            
+            This release contains signed executables and required runtime DLLs for Windows oneAPI MS-MPI builds.
+            
+            **Files:**
+            - `${{ env.ZIP_NAME }}` - Distribution archive (signed executables + DLLs)
+            - `checksums.txt` - SHA256 checksum
+            
+            **Verification:**
+            - All executables are signed with Microsoft Trusted Signing
+            - Build provenance is attested via GitHub artifact attestation
+          token: ${{ secrets.GITHUB_TOKEN }}
+
