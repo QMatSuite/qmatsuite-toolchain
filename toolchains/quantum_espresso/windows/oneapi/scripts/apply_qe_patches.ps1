@@ -21,7 +21,8 @@ if (-not (Test-Path (Join-Path $QePath ".git"))) {
 
 $patches = @(
     "qe-win-cmake-generation.patch",
-    "qe-win-c-portability.patch"
+    "qe-win-c-portability.patch",
+    "001-use-srand-instead-of-srandom.patch",
 )
 
 function Apply-OnePatch {
