@@ -1,0 +1,559 @@
+﻿diff --git a/temp/q-e-qe-7.5/upflib/read_upf_new.f90 b/q-e-qe-7.5/upflib/read_upf_new.f90
+index b84c633..66daff2 100644
+--- a/temp/q-e-qe-7.5/upflib/read_upf_new.f90
++++ b/q-e-qe-7.5/upflib/read_upf_new.f90
+@@ -44,6 +44,8 @@ CONTAINS
+     !! ierr=1-4 : error reading PP file
+     !! ierr= 81 : error opening PP file
+     !
++    CHARACTER(LEN=64) :: tag_buf  ! Fixed-length buffer for tag names (MinGW-safe)
++    !
+     iun = xml_open_file ( filename )
+     if ( iun == -1 ) THEN
+        ierr = 81
+@@ -85,14 +87,16 @@ CONTAINS
+     !! FIXME: this is needed only if the nonlinear core correction is used,
+     !! FIXME: but with PAW the pseudo-core charge is used also if no nlcc
+     IF(upf%nlcc) then
+-       CALL xmlr_readtag( capitalize_if_v2('pp_nlcc'), &
++       CALL capitalize_if_v2_into('pp_nlcc', v2, tag_buf)
++       CALL xmlr_readtag( TRIM(tag_buf), &
+             upf%rho_atc(:) )
+     else
+        upf%rho_atc(:) = 0.0_dp
+     end if
+     IF( .NOT. upf%tcoulombp) then
+        allocate ( upf%vloc(upf%mesh) )
+-       CALL xmlr_readtag( capitalize_if_v2('pp_local'), &
++       CALL capitalize_if_v2_into('pp_local', v2, tag_buf)
++       CALL xmlr_readtag( TRIM(tag_buf), &
+             upf%vloc(:), ierr )
+        !
+        ! existing PP files may have pp_nlcc first, pp_local later,
+@@ -115,7 +119,8 @@ CONTAINS
+     if ( ierr > 0 ) go to 10
+     !
+     ALLOCATE( upf%rho_at(1:upf%mesh) )
+-    CALL xmlr_readtag( capitalize_if_v2('pp_rhoatom'), &
++    CALL capitalize_if_v2_into('pp_rhoatom', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), &
+          upf%rho_at(1:upf%mesh) )
+     !
+     CALL read_pp_metagga ( upf, ierr)
+@@ -146,28 +151,59 @@ CONTAINS
+ 
+   END SUBROUTINE read_upf_new
+   !
+-  FUNCTION capitalize_if_v2 ( strin ) RESULT ( strout )
++  SUBROUTINE capitalize_if_v2_into ( strin, v2_flag, strout )
+     !
+-    ! returns a capitalized string for UPF v.2, the same string otherwise
++    ! Robust MinGW-safe version: writes capitalized string for UPF v.2, 
++    ! same string otherwise, into fixed-length output buffer.
+     ! (UPF v.2 uses capitalized tags, UPF with schema use lowercase)
+     !
++    ! This subroutine avoids allocatable CHARACTER returns that cause
++    ! empty-tag bugs on MinGW gfortran.
++    !
+     USE upf_utils, ONLY: capital
+     IMPLICIT NONE
+-    CHARACTER(LEN=*) :: strin
++    CHARACTER(LEN=*), INTENT(IN)  :: strin
++    LOGICAL,          INTENT(IN)  :: v2_flag
++    CHARACTER(LEN=*), INTENT(OUT) :: strout
+     !
+-    INTEGER :: n
+-    CHARACTER(LEN=:), ALLOCATABLE :: strout
++    INTEGER :: n, lt, lout
+     !
+-    IF ( v2 ) THEN
+-       strout = ''
+-       DO n = 1,LEN_TRIM(strin)
+-          strout = strout // capital(strin(n:n))
++    ! Initialize output to empty
++    strout = ''
++    !
++    ! Get trimmed input length
++    lt = LEN_TRIM(strin)
++    lout = LEN(strout)
++    !
++    ! Guard: detect empty input
++    IF (lt == 0) THEN
++       RETURN
++    END IF
++    !
++    ! Guard: ensure output buffer is large enough
++    IF (lout < lt) THEN
++       ERROR STOP 'capitalize_if_v2_into: buffer overflow'
++    END IF
++    !
++    IF ( v2_flag ) THEN
++       ! UPF v.2: capitalize each character
++       ! Use direct character assignment (NO concatenation)
++       DO n = 1, lt
++          strout(n:n) = capital(strin(n:n))
+        END DO
++       ! Pad remainder with blanks (already done by initialization)
+     ELSE
+-       strout = TRIM(strin)
++       ! UPF schema: copy trimmed input
++       strout(1:lt) = strin(1:lt)
++       ! Remainder already blank from initialization
++    END IF
++    !
++    ! Final safety check: ensure result is non-empty
++    IF (LEN_TRIM(strout) == 0 .AND. lt > 0) THEN
++       ERROR STOP 'capitalize_if_v2_into: empty result'
+     END IF
+     !
+-  END FUNCTION capitalize_if_v2
++  END SUBROUTINE capitalize_if_v2_into
+   !--------------------------------------------------------
+   SUBROUTINE read_pp_header_schema ( upf )
+     !--------------------------------------------------------
+@@ -175,7 +211,10 @@ CONTAINS
+     IMPLICIT NONE
+     TYPE(pseudo_upf), INTENT(INOUT) :: upf ! the pseudo data
+     !
+-    CALL xmlr_opentag( capitalize_if_v2('pp_header') )
++    CHARACTER(LEN=64) :: tag_buf
++    !
++    CALL capitalize_if_v2_into('pp_header', v2, tag_buf)
++    CALL xmlr_opentag( TRIM(tag_buf) )
+     !
+     CALL xmlr_readtag( 'element', upf%psd )
+     CALL xmlr_readtag( 'z_valence', upf%zp )
+@@ -213,8 +252,11 @@ CONTAINS
+     TYPE(pseudo_upf), INTENT(INOUT) :: upf ! the pseudo data
+     !
+     CHARACTER(LEN=1) :: dummy
++    CHARACTER(LEN=64) :: tag_buf
+     !
+-    CALL xmlr_readtag ( capitalize_if_v2('pp_header'), dummy )
++    ! Robust MinGW-safe tag handling: use fixed-length buffer
++    CALL capitalize_if_v2_into('pp_header', v2, tag_buf)
++    CALL xmlr_readtag ( TRIM(tag_buf), dummy )
+     CALL get_attr ('generated', upf%generated)
+     CALL get_attr ('author', upf%author)
+     CALL get_attr ('date', upf%date)
+@@ -252,8 +294,10 @@ CONTAINS
+     IMPLICIT NONE
+     TYPE(pseudo_upf),INTENT(INOUT) :: upf ! the pseudo data
+     integer :: mesh
++    CHARACTER(LEN=64) :: tag_buf
+     !
+-    CALL xmlr_opentag( capitalize_if_v2('pp_mesh') )
++    CALL capitalize_if_v2_into('pp_mesh', v2, tag_buf)
++    CALL xmlr_opentag( TRIM(tag_buf) )
+     CALL get_attr ( 'mesh', mesh )
+     if ( mesh == 0 ) THEN
+ #if defined (__debug)
+@@ -270,9 +314,17 @@ CONTAINS
+     CALL get_attr ( 'rmax', upf%rmax )
+     CALL get_attr ( 'zmesh', upf%zmesh )
+     allocate ( upf%r(1:upf%mesh) )
+-    CALL xmlr_readtag( capitalize_if_v2('pp_r'), upf%r(1:upf%mesh) )
++    CALL capitalize_if_v2_into('pp_r', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), upf%r(1:upf%mesh) )
++    IF (SIZE(upf%r) == 0) THEN
++       ERROR STOP 'read_pp_mesh: empty r array'
++    END IF
+     allocate ( upf%rab(1:upf%mesh) )
+-    CALL xmlr_readtag( capitalize_if_v2('pp_rab'), upf%rab(1:upf%mesh) )
++    CALL capitalize_if_v2_into('pp_rab', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), upf%rab(1:upf%mesh) )
++    IF (SIZE(upf%rab) == 0) THEN
++       ERROR STOP 'read_pp_mesh: empty rab array'
++    END IF
+     !
+     CALL xmlr_closetag( ) ! end pp_mesh
+     !
+@@ -288,6 +340,8 @@ CONTAINS
+     !
+     INTEGER :: nb, ind, l, j
+     CHARACTER(LEN=9) :: tag
++    CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     real(dp), allocatable :: vnl(:)
+     !
+     IF ( upf%typ == "SL" ) THEN
+@@ -298,7 +352,8 @@ CONTAINS
+           ALLOCATE(upf%vnl(upf%mesh,0:upf%lmax,1))
+        end if
+        allocate ( vnl(1:upf%mesh) )
+-       CALL xmlr_opentag( capitalize_if_v2('pp_semilocal') )       
++       CALL capitalize_if_v2_into('pp_semilocal', v2, tag_buf)
++       CALL xmlr_opentag( TRIM(tag_buf) )       
+        !
+        tag = 'vnl'
+        DO nb = 1,upf%nbeta
+@@ -306,7 +361,9 @@ CONTAINS
+              ! NOTA BENE: v2 format follows available PP files, written 
+              ! using original write_upf_v2; not FoX-based write_upf_v2
+              IF ( nb - 1 == upf%lloc ) CYCLE
+-             tag = 'PP_VNL.'//i2c(nb-1)
++             ! MinGW-safe tag construction
++             WRITE(nbuf,'(I0)') nb-1
++             tag = 'PP_VNL.' // TRIM(nbuf)
+           END IF
+           CALL xmlr_readtag( tag, vnl, ierr )
+           if ( ierr /= 0 ) then
+@@ -346,6 +403,8 @@ CONTAINS
+     LOGICAL :: isnull
+     INTEGER :: nb, ind, l, l_, ln, lm, mb, nmb
+     CHARACTER(LEN=15) :: tag
++    CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf, nbuf1, nbuf2, nbuf3  ! For MinGW-safe tag construction
+     REAL(dp), ALLOCATABLE :: aux(:)
+     !
+     nb = upf%nbeta
+@@ -369,16 +428,28 @@ CONTAINS
+        RETURN
+     END IF
+     !
+-    CALL xmlr_opentag( capitalize_if_v2('pp_nonlocal') )
++    CALL capitalize_if_v2_into('pp_nonlocal', v2, tag_buf)
++    CALL xmlr_opentag( TRIM(tag_buf) )
+     !
+     DO nb = 1,upf%nbeta
+        !
+        IF ( v2 ) THEN
+-          tag = 'PP_BETA.'//i2c(nb)
++          ! MinGW-safe tag construction: use direct WRITE instead of i2c()
++          ! This avoids allocatable character issues on MinGW gfortran
++          WRITE(nbuf,'(I0)') nb
++          tag = 'PP_BETA.' // TRIM(nbuf)
++          ! Safety check: ensure tag is non-empty
++          IF (LEN_TRIM(tag) == 0) THEN
++             ERROR STOP 'read_pp_nonlocal: empty tag after construction'
++          END IF
+        ELSE
+           tag = 'pp_beta'
+        END IF
+        CALL xmlr_readtag( tag, upf%beta(1:upf%mesh,nb) )
++       ! Robust check: ensure array is non-empty
++       IF (SIZE(upf%beta(1:upf%mesh,nb)) == 0) THEN
++          ERROR STOP 'read_pp_nonlocal: empty beta array'
++       END IF
+        CALL get_attr('index', mb)
+        ! not-so-strict test: index is absent or incorrect in some UPF v.2 files
+        IF ( .NOT. v2 .AND. nb /= mb ) then
+@@ -388,6 +459,10 @@ CONTAINS
+        end if
+        CALL get_attr('label', upf%els_beta(nb))
+        CALL get_attr('angular_momentum', upf%lll(nb))
++       ! Robust check: ensure angular_momentum is valid (0 <= l <= lmax)
++       IF (upf%lll(nb) < 0 .OR. upf%lll(nb) > upf%lmax) THEN
++          ERROR STOP 'read_pp_nonlocal: invalid angular_momentum'
++       END IF
+        IF ( .NOT. v2 .AND. upf%has_so ) &
+             CALL get_attr('tot_ang_mom', upf%jjj(nb))
+        CALL get_attr('cutoff_radius_index', upf%kbeta(nb))
+@@ -404,12 +479,14 @@ CONTAINS
+     !
+     ! pp_dij (D_lm matrix)
+     !
+-    CALL xmlr_readtag ( capitalize_if_v2 ('pp_dij'), upf%dion )
++    CALL capitalize_if_v2_into('pp_dij', v2, tag_buf)
++    CALL xmlr_readtag ( TRIM(tag_buf), upf%dion )
+     !
+     ! pp_augmentation
+     !
+     IF (upf%tvanp .or. upf%tpawp) THEN
+-       CALL xmlr_opentag( capitalize_if_v2('pp_augmentation') )
++       CALL capitalize_if_v2_into('pp_augmentation', v2, tag_buf)
++       CALL xmlr_opentag( TRIM(tag_buf) )
+        !
+        IF ( v2 ) THEN
+           CALL get_attr ( 'q_with_l', upf%q_with_l )
+@@ -435,11 +512,13 @@ CONTAINS
+           ENDIF
+        ENDIF
+        !
+-       CALL xmlr_readtag( capitalize_if_v2('pp_q'), upf%qqq )
++       CALL capitalize_if_v2_into('pp_q', v2, tag_buf)
++       CALL xmlr_readtag( TRIM(tag_buf), upf%qqq )
+        !
+        IF ( upf%tpawp ) THEN
+           ALLOCATE ( upf%paw%augmom(1:upf%nbeta,1:upf%nbeta,0:2*upf%lmax) )
+-          CALL xmlr_readtag( capitalize_if_v2('pp_multipoles'), upf%paw%augmom )
++          CALL capitalize_if_v2_into('pp_multipoles', v2, tag_buf)
++          CALL xmlr_readtag( TRIM(tag_buf), upf%paw%augmom )
+        ENDIF
+        !
+        ! read polinomial coefficients for Q_ij expansion at small radius
+@@ -481,7 +560,11 @@ CONTAINS
+                    IF( upf%tpawp ) isnull = (abs(upf%paw%augmom(nb,mb,l)) < upf%qqq_eps)
+                    IF(isnull) CYCLE loop_on_l
+                    IF ( v2 ) THEN
+-                      tag = 'PP_QIJL.'//i2c(nb)//'.'//i2c(mb)//'.'//i2c(l)
++                      ! MinGW-safe tag construction
++                      WRITE(nbuf1,'(I0)') nb
++                      WRITE(nbuf2,'(I0)') mb
++                      WRITE(nbuf3,'(I0)') l
++                      tag = 'PP_QIJL.' // TRIM(nbuf1) // '.' // TRIM(nbuf2) // '.' // TRIM(nbuf3)
+                    ELSE
+                       tag = 'pp_qijl'
+                    END IF
+@@ -506,7 +589,10 @@ CONTAINS
+                 IF  ( upf%tpawp ) isnull = ( abs(upf%qqq(nb,mb)) < upf%qqq_eps )
+                 IF (isnull) CYCLE loop_on_mb
+                 IF ( v2 ) THEN
+-                   tag = 'PP_QIJ.'//i2c(nb)//'.'//i2c(mb)
++                   ! MinGW-safe tag construction
++                   WRITE(nbuf1,'(I0)') nb
++                   WRITE(nbuf2,'(I0)') mb
++                   tag = 'PP_QIJ.' // TRIM(nbuf1) // '.' // TRIM(nbuf2)
+                 ELSE
+                    tag = 'pp_qij'
+                 END IF
+@@ -546,6 +632,8 @@ CONTAINS
+     !
+     INTEGER :: nw, ind, l
+     CHARACTER(LEN=9) :: tag
++    CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     allocate ( upf%chi(1:upf%mesh,upf%nwfc) )
+     allocate ( upf%els(upf%nwfc), &
+@@ -557,14 +645,25 @@ CONTAINS
+                 upf%epseu(upf%nwfc) )
+     IF ( upf%has_so ) allocate ( upf%jchi(upf%nwfc) )
+     !
+-    CALL xmlr_opentag( capitalize_if_v2('pp_pswfc') )
++    CALL capitalize_if_v2_into('pp_pswfc', v2, tag_buf)
++    CALL xmlr_opentag( TRIM(tag_buf) )
+     DO nw=1,upf%nwfc
+        IF ( v2 ) THEN
+-          tag = 'PP_CHI.'//i2c(nw)
++          ! MinGW-safe tag construction: use direct WRITE instead of i2c()
++          WRITE(nbuf,'(I0)') nw
++          tag = 'PP_CHI.' // TRIM(nbuf)
++          ! Safety check: ensure tag is non-empty
++          IF (LEN_TRIM(tag) == 0) THEN
++             ERROR STOP 'read_pp_pswfc: empty tag after construction'
++          END IF
+        ELSE
+           tag = 'pp_chi'
+        END IF
+        CALL xmlr_readtag( tag, upf%chi(1:upf%mesh,nw) )
++       ! Robust check: ensure array is non-empty
++       IF (SIZE(upf%chi(1:upf%mesh,nw)) == 0) THEN
++          ERROR STOP 'read_pp_pswfc: empty chi array'
++       END IF
+        call get_attr('index', ind)
+        ! not-so-strict test: index is absent or incorrect in some UPF v.2 files
+        if ( .NOT. v2 .AND. ind /= nw ) then
+@@ -574,6 +673,10 @@ CONTAINS
+        end if
+        call get_attr( 'label', upf%els(nw) )
+        call get_attr( 'l', upf%lchi(nw) )
++       ! Robust check: ensure l is valid (0 <= l <= lmax)
++       IF (upf%lchi(nw) < 0 .OR. upf%lchi(nw) > upf%lmax) THEN
++          ERROR STOP 'read_pp_pswfc: invalid l'
++       END IF
+        IF ( .not. v2 .and. upf%has_so ) call get_attr( 'jchi', upf%jchi(nw) )
+        call get_attr( 'occupation', upf%oc(nw) )
+        call get_attr( 'n', upf%nchi(nw) )
+@@ -581,6 +684,7 @@ CONTAINS
+        call get_attr( 'cutoff_radius', upf%rcut_chi(nw) )
+        call get_attr( 'ultrasoft_cutoff_radius', upf%rcutus_chi(nw) )
+     END DO
++    !
+     CALL xmlr_closetag( ) ! end pp_pswfc
+     !
+   END SUBROUTINE read_pp_pswfc
+@@ -595,15 +699,20 @@ CONTAINS
+     !
+     INTEGER :: nb, mb
+     CHARACTER(LEN=15) :: tag
++    CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF ( upf%has_wfc ) THEN
+        !
+        ALLOCATE (upf%aewfc(1:upf%mesh,upf%nbeta) )
+-       CALL xmlr_opentag( capitalize_if_v2('pp_full_wfc') )
++       CALL capitalize_if_v2_into('pp_full_wfc', v2, tag_buf)
++       CALL xmlr_opentag( TRIM(tag_buf) )
+        !
+        DO nb = 1, upf%nbeta
+           IF ( v2 ) THEN
+-             tag = 'PP_AEWFC.'//i2c(nb)
++             ! MinGW-safe tag construction
++             WRITE(nbuf,'(I0)') nb
++             tag = 'PP_AEWFC.' // TRIM(nbuf)
+           ELSE
+              tag = 'pp_aewfc'
+           END IF
+@@ -622,7 +731,9 @@ CONTAINS
+           ALLOCATE (upf%paw%aewfc_rel(1:upf%mesh,upf%nbeta) )
+           DO nb = 1, upf%nbeta
+              IF ( v2 ) THEN
+-                tag = 'PP_AEWFC_REL.'//i2c(nb)
++                ! MinGW-safe tag construction
++                WRITE(nbuf,'(I0)') nb
++                tag = 'PP_AEWFC_REL.' // TRIM(nbuf)
+              ELSE
+                 tag = 'pp_aewfc_rel'
+              END IF
+@@ -639,7 +750,9 @@ CONTAINS
+        ALLOCATE (upf%pswfc(1:upf%mesh,upf%nbeta) )
+        DO nb = 1, upf%nbeta
+           IF ( v2 ) THEN
+-             tag = 'PP_PSWFC.'//i2c(nb)
++             ! MinGW-safe tag construction
++             WRITE(nbuf,'(I0)') nb
++             tag = 'PP_PSWFC.' // TRIM(nbuf)
+           ELSE
+              tag = 'pp_pswfc'
+           END IF
+@@ -666,13 +779,17 @@ CONTAINS
+     TYPE(pseudo_upf),INTENT(INOUT) :: upf ! the pseudo data
+     INTEGER, INTENT(INOUT) :: ierr
+     !
++    CHARACTER(LEN=64) :: tag_buf
++    !
+     ierr = 0
+     if ( .NOT. upf%with_metagga_info ) RETURN
+     !
+     allocate ( upf%tau_core(upf%mesh) )
+     allocate ( upf%tau_atom(upf%mesh) )
+-    CALL xmlr_readtag( capitalize_if_v2('pp_taumod'), upf%tau_core(:) )
+-    CALL xmlr_readtag( capitalize_if_v2('pp_tauatom'), upf%tau_atom(:) )
++    CALL capitalize_if_v2_into('pp_taumod', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), upf%tau_core(:) )
++    CALL capitalize_if_v2_into('pp_tauatom', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), upf%tau_atom(:) )
+     !
+   END SUBROUTINE read_pp_metagga
+   !
+@@ -685,12 +802,15 @@ CONTAINS
+     INTEGER, INTENT(INOUT) :: ierr
+     INTEGER :: nw, nb, nn
+     CHARACTER(LEN=1) :: dummy
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF ( .NOT. v2 .OR. .NOT. upf%has_so ) RETURN
+     !
+     CALL xmlr_opentag( 'PP_SPIN_ORB' )
+     DO nw = 1,upf%nwfc
+-       CALL xmlr_readtag( 'PP_RELWFC.'//i2c(nw), dummy )
++       ! MinGW-safe tag construction
++       WRITE(nbuf,'(I0)') nw
++       CALL xmlr_readtag( 'PP_RELWFC.' // TRIM(nbuf), dummy )
+        CALL get_attr( 'index' , nb )
+        ! not-so-strict test: index absent or incorrect in some UPF v.2 files
+        IF ( .NOT. v2 .AND. nb /= nw ) THEN
+@@ -711,7 +831,9 @@ CONTAINS
+     ENDDO
+     !
+     DO nb = 1,upf%nbeta
+-       CALL xmlr_readtag( 'PP_RELBETA.'//i2c(nb), dummy, ierr )
++       ! MinGW-safe tag construction
++       WRITE(nbuf,'(I0)') nb
++       CALL xmlr_readtag( 'PP_RELBETA.' // TRIM(nbuf), dummy, ierr )
+        !
+        ! existing PP files may have pp_relbeta first, pp_relwfc later,
+        ! but also the other way round
+@@ -737,23 +859,28 @@ CONTAINS
+     TYPE(pseudo_upf),INTENT(INOUT) :: upf ! the pseudo data
+     INTEGER, INTENT(INOUT) :: ierr
+     INTEGER :: nb, mb
++    CHARACTER(LEN=64) :: tag_buf
+     !
+     IF ( .NOT. upf%tpawp ) RETURN
+     !
+-    CALL xmlr_opentag( capitalize_if_v2('pp_paw') )
++    CALL capitalize_if_v2_into('pp_paw', v2, tag_buf)
++    CALL xmlr_opentag( TRIM(tag_buf) )
+     CALL get_attr ('paw_data_format', upf%paw_data_format)
+     CALL get_attr ('core_energy', upf%paw%core_energy) 
+     ! Full occupation (not only > 0 ones)
+     ALLOCATE (upf%paw%oc(upf%nbeta) )
+     ALLOCATE (upf%paw%ae_rho_atc(upf%mesh) )
+     ALLOCATE (upf%paw%ae_vloc(upf%mesh) )
+-    CALL xmlr_readtag( capitalize_if_v2('pp_occupations'), &
++    CALL capitalize_if_v2_into('pp_occupations', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), &
+          upf%paw%oc(1:upf%nbeta) )
+     ! All-electron core charge
+-    CALL xmlr_readtag( capitalize_if_v2('pp_ae_nlcc'), &
++    CALL capitalize_if_v2_into('pp_ae_nlcc', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), &
+          upf%paw%ae_rho_atc(1:upf%mesh) )
+     ! All-electron local potential
+-    CALL xmlr_readtag( capitalize_if_v2('pp_ae_vloc'), &
++    CALL capitalize_if_v2_into('pp_ae_vloc', v2, tag_buf)
++    CALL xmlr_readtag( TRIM(tag_buf), &
+          upf%paw%ae_vloc(1:upf%mesh) )
+     CALL xmlr_closetag () ! end pp_paw
+     !
+@@ -812,10 +939,13 @@ CONTAINS
+     !
+     INTEGER :: nb, mb
+     CHARACTER(LEN=24) :: tag
++    CHARACTER(LEN=64) :: tag_buf
++    CHARACTER(LEN=32) :: nbuf  ! For MinGW-safe tag construction
+     !
+     IF (.NOT. upf%has_gipaw) RETURN
+     !
+-    CALL xmlr_opentag( capitalize_if_v2('pp_gipaw') )
++    CALL capitalize_if_v2_into('pp_gipaw', v2, tag_buf)
++    CALL xmlr_opentag( TRIM(tag_buf) )
+     CALL get_attr ('gipaw_data_format', upf%gipaw_data_format ) 
+     IF ( v2 ) THEN
+        CALL xmlr_opentag( 'PP_GIPAW_CORE_ORBITALS', IERR=ierr )
+@@ -833,7 +963,9 @@ CONTAINS
+     ALLOCATE ( upf%gipaw_core_orbital_l(upf%gipaw_ncore_orbitals) )
+     DO nb = 1,upf%gipaw_ncore_orbitals
+        IF ( v2 ) THEN
+-          tag = "PP_GIPAW_CORE_ORBITAL."//i2c(nb)
++          ! MinGW-safe tag construction
++          WRITE(nbuf,'(I0)') nb
++          tag = "PP_GIPAW_CORE_ORBITAL." // TRIM(nbuf)
+        ELSE
+           tag = 'pp_gipaw_core_orbital'
+        END IF
+@@ -896,7 +1028,9 @@ CONTAINS
+        ALLOCATE ( upf%gipaw_wfs_ps(upf%mesh,upf%gipaw_wfs_nchannels) )
+        DO nb = 1,upf%gipaw_wfs_nchannels
+           IF ( v2 ) THEN
+-             tag = "PP_GIPAW_ORBITAL."//i2c(nb)
++             ! MinGW-safe tag construction
++             WRITE(nbuf,'(I0)') nb
++             tag = "PP_GIPAW_ORBITAL." // TRIM(nbuf)
+           ELSE
+              tag = 'pp_gipaw_orbital'
+           END IF
+@@ -911,9 +1045,11 @@ CONTAINS
+           CALL get_attr ('l',     upf%gipaw_wfs_ll(nb) )
+           CALL get_attr ('cutoff_radius', upf%gipaw_wfs_rcut(nb) )
+           CALL get_attr ('ultrasoft_cutoff_radius', upf%gipaw_wfs_rcutus(nb) )
+-          CALL xmlr_readtag( capitalize_if_v2('pp_gipaw_wfs_ae'), &
++          CALL capitalize_if_v2_into('pp_gipaw_wfs_ae', v2, tag_buf)
++          CALL xmlr_readtag( TRIM(tag_buf), &
+                upf%gipaw_wfs_ae(1:upf%mesh,nb) )
+-          CALL xmlr_readtag( capitalize_if_v2('pp_gipaw_wfs_ps'),&
++          CALL capitalize_if_v2_into('pp_gipaw_wfs_ps', v2, tag_buf)
++          CALL xmlr_readtag( TRIM(tag_buf),&
+                upf%gipaw_wfs_ps(1:upf%mesh,nb) )
+           CALL xmlr_closetag ()
+        END DO
+@@ -923,10 +1059,13 @@ CONTAINS
+        !
+        ALLOCATE ( upf%gipaw_vlocal_ae(upf%mesh) )
+        ALLOCATE ( upf%gipaw_vlocal_ps(upf%mesh) )
+-       CALL xmlr_opentag( capitalize_if_v2('pp_gipaw_vlocal') )
+-       CALL xmlr_readtag( capitalize_if_v2('pp_gipaw_vlocal_ae'), &
++       CALL capitalize_if_v2_into('pp_gipaw_vlocal', v2, tag_buf)
++       CALL xmlr_opentag( TRIM(tag_buf) )
++       CALL capitalize_if_v2_into('pp_gipaw_vlocal_ae', v2, tag_buf)
++       CALL xmlr_readtag( TRIM(tag_buf), &
+             upf%gipaw_vlocal_ae(1:upf%mesh) )
+-       CALL xmlr_readtag( capitalize_if_v2('pp_gipaw_vlocal_ps'), &
++       CALL capitalize_if_v2_into('pp_gipaw_vlocal_ps', v2, tag_buf)
++       CALL xmlr_readtag( TRIM(tag_buf), &
+             upf%gipaw_vlocal_ps(1:upf%mesh) )
+        CALL xmlr_closetag ()
+     END IF

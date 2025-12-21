@@ -1,0 +1,322 @@
+﻿diff --git a/temp/q-e-qe-7.5/upflib/write_upf_new.f90 b/q-e-qe-7.5/upflib/write_upf_new.f90
+index 546fa90..ba5200f 100644
+--- a/temp/q-e-qe-7.5/upflib/write_upf_new.f90
++++ b/q-e-qe-7.5/upflib/write_upf_new.f90
+@@ -41,6 +41,7 @@ CONTAINS
+     !!  generation input in the upf file
+     !
+     CHARACTER(LEN=5) :: schema_='qe_pp'
++    CHARACTER(LEN=64) :: tag_buf
+     CHARACTER(LEN=*), PARAMETER   :: QE_PP_URI = &
+          "http://www.quantum-espresso.org/ns/qes/qe_pp-1.0", &
+          XSI = "http://www.w3.org/2001/XMLSchema-instance", &
+@@ -102,11 +103,13 @@ CONTAINS
+     !
+     IF( upf%nlcc ) THEN
+        CALL add_attr( 'size', upf%mesh )
+-       CALL xmlw_writetag(capitalize_if_v2('pp_nlcc'), upf%rho_atc(1:upf%mesh))
++       CALL capitalize_if_v2_into('pp_nlcc', v2, tag_buf)
++       CALL xmlw_writetag(TRIM(tag_buf), upf%rho_atc(1:upf%mesh))
+     END IF
+     IF( .NOT. upf%tcoulombp ) THEN
+        CALL add_attr( 'size', upf%mesh )
+-       CALL xmlw_writetag( capitalize_if_v2('pp_local'), upf%vloc(1:upf%mesh))
++       CALL capitalize_if_v2_into('pp_local', v2, tag_buf)
++       CALL xmlw_writetag( TRIM(tag_buf), upf%vloc(1:upf%mesh))
+     END IF
+     !
+     CALL write_pp_semilocal ( upf )
+@@ -118,7 +121,8 @@ CONTAINS
+     CALL write_pp_full_wfc ( upf )
+     !
+     CALL add_attr( 'size', upf%mesh )
+-    CALL xmlw_writetag( capitalize_if_v2('pp_rhoatom'), upf%rho_at(1:upf%mesh))
++    CALL capitalize_if_v2_into('pp_rhoatom', v2, tag_buf)
++    CALL xmlw_writetag( TRIM(tag_buf), upf%rho_at(1:upf%mesh))
+     !
+     CALL write_pp_metagga ( upf )
+     !
+@@ -138,28 +142,56 @@ CONTAINS
+     !
+   END SUBROUTINE write_upf
+   !
+-  FUNCTION capitalize_if_v2 ( strin ) RESULT ( strout )
++  SUBROUTINE capitalize_if_v2_into ( strin, v2_flag, strout )
+     !
+-    ! returns a capitalized string for UPF v.2, the same string otherwise
++    ! Robust MinGW-safe version: writes capitalized string for UPF v.2, 
++    ! same string otherwise, into fixed-length output buffer.
+     ! (UPF v.2 uses capitalized tags, UPF with schema use lowercase)
+     !
++    ! This subroutine avoids allocatable CHARACTER returns that cause
++    ! empty-tag bugs on MinGW gfortran.
++    !
+     USE upf_utils, ONLY: capital
+     IMPLICIT NONE
+-    CHARACTER(LEN=*) :: strin
++    CHARACTER(LEN=*), INTENT(IN)  :: strin
++    LOGICAL,          INTENT(IN)  :: v2_flag
++    CHARACTER(LEN=*), INTENT(OUT) :: strout
+     !
+-    INTEGER :: n
+-    CHARACTER(LEN=:), ALLOCATABLE :: strout
++    INTEGER :: n, lt, lout
+     !
+-    IF ( v2 ) THEN
+-       strout = ''
+-       DO n = 1,LEN_TRIM(strin)
+-          strout = strout // capital(strin(n:n))
++    ! Initialize output to empty
++    strout = ''
++    !
++    ! Get trimmed input length
++    lt = LEN_TRIM(strin)
++    lout = LEN(strout)
++    !
++    ! Guard: detect empty input
++    IF (lt == 0) THEN
++       RETURN
++    END IF
++    !
++    ! Guard: ensure output buffer is large enough
++    IF (lout < lt) THEN
++       WRITE(*,'("FATAL: capitalize_if_v2_into: output buffer too small")')
++       WRITE(*,'("  Input length: ",I0,", buffer size: ",I0)') lt, lout
++       ERROR STOP 'capitalize_if_v2_into: buffer overflow'
++    END IF
++    !
++    IF ( v2_flag ) THEN
++       ! UPF v.2: capitalize each character
++       ! Use direct character assignment (NO concatenation)
++       DO n = 1, lt
++          strout(n:n) = capital(strin(n:n))
+        END DO
++       ! Pad remainder with blanks (already done by initialization)
+     ELSE
+-       strout = TRIM(strin)
++       ! UPF schema: copy trimmed input
++       strout(1:lt) = strin(1:lt)
++       ! Remainder already blank from initialization
+     END IF
+     !
+-  END FUNCTION capitalize_if_v2
++  END SUBROUTINE capitalize_if_v2_into
+   !
+   !--------------------------------------------------------
+   SUBROUTINE write_pp_info_schema ( upf, conf, u_input )
+@@ -439,18 +471,23 @@ CONTAINS
+     IMPLICIT NONE
+     TYPE(pseudo_upf),INTENT(IN) :: upf ! the pseudo data
+     !
++    CHARACTER(LEN=64) :: tag_buf
+     IF ( upf%dx > 0.d0) THEN
+        CALL add_attr( 'mesh', upf%mesh )
+        CALL add_attr( 'dx', upf%dx )
+        CALL add_attr( 'xmin', upf%xmin )
+        CALL add_attr( 'rmax', upf%rmax )
+        CALL add_attr( 'zmesh', upf%zmesh )
+-       CALL xmlw_opentag( capitalize_if_v2('pp_mesh') )
++       CALL capitalize_if_v2_into('pp_mesh', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+     ELSE
+-       CALL xmlw_opentag( capitalize_if_v2('pp_mesh') )
++       CALL capitalize_if_v2_into('pp_mesh', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+     END IF
+-    CALL xmlw_writetag( capitalize_if_v2('pp_r'), upf%r(1:upf%mesh) )
+-    CALL xmlw_writetag( capitalize_if_v2('pp_rab'), upf%rab(1:upf%mesh) )
++    CALL capitalize_if_v2_into('pp_r', v2, tag_buf)
++    CALL xmlw_writetag( TRIM(tag_buf), upf%r(1:upf%mesh) )
++    CALL capitalize_if_v2_into('pp_rab', v2, tag_buf)
++    CALL xmlw_writetag( TRIM(tag_buf), upf%rab(1:upf%mesh) )
+     !
+     CALL xmlw_closetag( ) ! end pp_mesh
+     !
+@@ -465,9 +502,11 @@ CONTAINS
+     !
+     INTEGER :: nb, ind, l
+     CHARACTER(LEN=8) :: tag
++    CHARACTER(LEN=64) :: tag_buf
+     !
+     IF ( upf%typ == "SL" ) THEN
+-       CALL xmlw_opentag( capitalize_if_v2('pp_semilocal') )
++       CALL capitalize_if_v2_into('pp_semilocal', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+        !
+        DO nb = 1,upf%nbeta
+           l = upf%lll(nb)
+@@ -503,8 +542,10 @@ CONTAINS
+     LOGICAL :: isnull
+     INTEGER :: nb, ind, l, ln, lm, mb, nmb
+     CHARACTER(LEN=15) :: tag
++    CHARACTER(LEN=64) :: tag_buf
+     !
+-    CALL xmlw_opentag( capitalize_if_v2('pp_nonlocal') )
++    CALL capitalize_if_v2_into('pp_nonlocal', v2, tag_buf)
++    CALL xmlw_opentag( TRIM(tag_buf) )
+     !
+     DO nb = 1,upf%nbeta
+        !
+@@ -531,7 +572,8 @@ CONTAINS
+     !
+     call add_attr( 'columns',  upf%nbeta )
+     call add_attr( 'rows', upf%nbeta )
+-    CALL xmlw_opentag( capitalize_if_v2 ('pp_dij') )
++    CALL capitalize_if_v2_into('pp_dij', v2, tag_buf)
++    CALL xmlw_opentag( TRIM(tag_buf) )
+     DO nb = 1,upf%nbeta
+        WRITE(iun,*) upf%dion(1:upf%nbeta,nb)
+     END DO
+@@ -552,7 +594,8 @@ CONTAINS
+              CALL add_attr( 'l_max_aug', upf%paw%lmax_aug )
+           ENDIF
+        END IF
+-       CALL xmlw_opentag( capitalize_if_v2('pp_augmentation') )
++       CALL capitalize_if_v2_into('pp_augmentation', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+        !
+        IF ( .NOT. v2 ) THEN
+           CALL xmlw_writetag( 'q_with_l', upf%q_with_l )
+@@ -569,7 +612,8 @@ CONTAINS
+        !
+        nb = upf%nbeta*upf%nbeta
+        call add_attr( 'size', nb )
+-       CALL xmlw_opentag( capitalize_if_v2('pp_q') )
++       CALL capitalize_if_v2_into('pp_q', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+        DO nb = 1,upf%nbeta
+           WRITE(iun,*) upf%qqq(1:upf%nbeta,nb)
+        END DO
+@@ -580,7 +624,8 @@ CONTAINS
+                &      'multipole array dims = (nbeta,nbeta,2*lmax+1)-->')")
+           call add_attr( 'nbeta', upf%nbeta )
+           call add_attr( 'lmax', upf%lmax )
+-          CALL xmlw_opentag( capitalize_if_v2('pp_multipoles') )
++          CALL capitalize_if_v2_into('pp_multipoles', v2, tag_buf)
++          CALL xmlw_opentag( TRIM(tag_buf) )
+           DO l = 0,2*upf%lmax
+              DO nb = 1,upf%nbeta
+                 WRITE(iun,*) upf%paw%augmom(1:upf%nbeta,nb,l)
+@@ -663,8 +708,10 @@ CONTAINS
+     !
+     INTEGER :: nw, ind, l
+     CHARACTER(LEN=8) :: tag
++    CHARACTER(LEN=64) :: tag_buf
+     !
+-    CALL xmlw_opentag( capitalize_if_v2('pp_pswfc') )
++    CALL capitalize_if_v2_into('pp_pswfc', v2, tag_buf)
++    CALL xmlw_opentag( TRIM(tag_buf) )
+     DO nw =1, upf%nwfc
+        call add_attr( 'size', upf%mesh )
+        call add_attr( 'index', nw )
+@@ -703,11 +750,13 @@ CONTAINS
+     !
+     INTEGER :: nb
+     CHARACTER(LEN=15) :: tag
++    CHARACTER(LEN=64) :: tag_buf
+     !
+     IF ( upf%has_wfc ) THEN
+        !
+        call add_attr( 'number_of_wfc', upf%nbeta )
+-       CALL xmlw_opentag( capitalize_if_v2('pp_full_wfc') )
++       CALL capitalize_if_v2_into('pp_full_wfc', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+        !
+        DO nb = 1, upf%nbeta
+           IF ( v2 ) THEN
+@@ -761,10 +810,14 @@ CONTAINS
+     IMPLICIT NONE
+     TYPE(pseudo_upf),INTENT(IN) :: upf ! the pseudo data
+     !
++    CHARACTER(LEN=64) :: tag_buf
++    !
+     if ( .NOT. upf%with_metagga_info ) RETURN
+     !
+-    CALL xmlw_writetag( capitalize_if_v2('pp_taumod'), upf%tau_core(:) )
+-    CALL xmlw_writetag( capitalize_if_v2('pp_tauatom'), upf%tau_atom(:) )
++    CALL capitalize_if_v2_into('pp_taumod', v2, tag_buf)
++    CALL xmlw_writetag( TRIM(tag_buf), upf%tau_core(:) )
++    CALL capitalize_if_v2_into('pp_tauatom', v2, tag_buf)
++    CALL xmlw_writetag( TRIM(tag_buf), upf%tau_atom(:) )
+     !
+   END SUBROUTINE write_pp_metagga
+   !
+@@ -806,21 +859,27 @@ CONTAINS
+     IMPLICIT NONE
+     TYPE(pseudo_upf),INTENT(IN) :: upf ! the pseudo data
+     !
++    CHARACTER(LEN=64) :: tag_buf
++    !
+     IF ( upf%tpawp ) THEN
+        call add_attr( 'paw_data_format', upf%paw_data_format )
+        call add_attr( 'core_energy', upf%paw%core_energy )
+-       CALL xmlw_opentag( capitalize_if_v2('pp_paw') )
++       CALL capitalize_if_v2_into('pp_paw', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+        ! Full occupation (not only > 0 ones)
+        call add_attr( 'size', upf%nbeta )
+-       CALL xmlw_writetag( capitalize_if_v2('pp_occupations'), &
++       CALL capitalize_if_v2_into('pp_occupations', v2, tag_buf)
++       CALL xmlw_writetag( TRIM(tag_buf), &
+             upf%paw%oc(1:upf%nbeta) )
+        ! All-electron core charge
+        call add_attr( 'size', upf%mesh )
+-       CALL xmlw_writetag( capitalize_if_v2('pp_ae_nlcc'), &
++       CALL capitalize_if_v2_into('pp_ae_nlcc', v2, tag_buf)
++       CALL xmlw_writetag( TRIM(tag_buf), &
+             upf%paw%ae_rho_atc(1:upf%mesh) )
+        ! All-electron local potential
+        call add_attr( 'size', upf%mesh )
+-       CALL xmlw_writetag( capitalize_if_v2('pp_ae_vloc'), &
++       CALL capitalize_if_v2_into('pp_ae_vloc', v2, tag_buf)
++       CALL xmlw_writetag( TRIM(tag_buf), &
+             upf%paw%ae_vloc(1:upf%mesh) )
+        CALL xmlw_closetag () ! end pp_paw
+     END IF
+@@ -835,10 +894,12 @@ CONTAINS
+     !
+     INTEGER :: nb
+     CHARACTER(LEN=24) :: tag
++    CHARACTER(LEN=64) :: tag_buf
+     !
+     IF (upf%has_gipaw) THEN
+        call add_attr( 'gipaw_data_format', upf%gipaw_data_format )
+-       CALL xmlw_opentag( capitalize_if_v2('pp_gipaw') )
++       CALL capitalize_if_v2_into('pp_gipaw', v2, tag_buf)
++       CALL xmlw_opentag( TRIM(tag_buf) )
+        IF ( v2 ) THEN
+           call add_attr( 'number_of_core_orbitals', upf%gipaw_ncore_orbitals )
+           CALL xmlw_opentag( 'PP_GIPAW_CORE_ORBITALS' )
+@@ -886,22 +947,27 @@ CONTAINS
+              CALL xmlw_opentag( tag)
+              !
+              call add_attr( 'size', upf%mesh )
+-             CALL xmlw_writetag( capitalize_if_v2('pp_gipaw_wfs_ae'), &
++             CALL capitalize_if_v2_into('pp_gipaw_wfs_ae', v2, tag_buf)
++             CALL xmlw_writetag( TRIM(tag_buf), &
+                   upf%gipaw_wfs_ae(1:upf%mesh,nb) )
+              call add_attr( 'size', upf%mesh )
+-             CALL xmlw_writetag( capitalize_if_v2('pp_gipaw_wfs_ps'),&
++             CALL capitalize_if_v2_into('pp_gipaw_wfs_ps', v2, tag_buf)
++             CALL xmlw_writetag( TRIM(tag_buf),&
+                   upf%gipaw_wfs_ps(1:upf%mesh,nb) )
+              CALL xmlw_closetag ()
+           END DO
+           IF ( v2 ) CALL xmlw_closetag( )
+           !
+           ! Write all-electron and pseudo local potentials
+-          CALL xmlw_opentag( capitalize_if_v2('pp_gipaw_vlocal') )
++          CALL capitalize_if_v2_into('pp_gipaw_vlocal', v2, tag_buf)
++          CALL xmlw_opentag( TRIM(tag_buf) )
+           call add_attr( 'size', upf%mesh )
+-          CALL xmlw_writetag( capitalize_if_v2('pp_gipaw_vlocal_ae'), &
++          CALL capitalize_if_v2_into('pp_gipaw_vlocal_ae', v2, tag_buf)
++          CALL xmlw_writetag( TRIM(tag_buf), &
+                upf%gipaw_vlocal_ae(1:upf%mesh) )
+           call add_attr( 'size', upf%mesh )
+-          CALL xmlw_writetag( capitalize_if_v2('pp_gipaw_vlocal_ps'), &
++          CALL capitalize_if_v2_into('pp_gipaw_vlocal_ps', v2, tag_buf)
++          CALL xmlw_writetag( TRIM(tag_buf), &
+                upf%gipaw_vlocal_ps(1:upf%mesh) )
+           CALL xmlw_closetag ()
+        END IF

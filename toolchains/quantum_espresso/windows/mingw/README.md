@@ -1,10 +1,96 @@
-# QE on Windows (MinGW)
+# Quantum ESPRESSO on Windows (MSYS2 UCRT64)
 
-Windows-specific build notes and scripts for Quantum ESPRESSO using MSYS2/MinGW-w64.
+Windows-specific build guide for Quantum ESPRESSO 7.5 using MSYS2 + MinGW-w64 (UCRT64 toolchain).
 
-## Prerequisites
+## Quick Start
 
-### 1. Install MSYS2
+**Goal:** Build and run QE in <10 minutes using known-good production flags.
+
+### Prerequisites
+
+1. **Install MSYS2** (if not already installed):
+   - Download from https://www.msys2.org/
+   - Or use Chocolatey: `choco install msys2`
+
+2. **Open MSYS2 UCRT64 terminal** (not the regular MSYS2 terminal)
+
+3. **Install required packages:**
+   ```bash
+   pacman -Syu
+   pacman -S --needed \
+     base-devel git wget patch make pkgconf \
+     mingw-w64-ucrt-x86_64-toolchain \
+     mingw-w64-ucrt-x86_64-gcc-fortran \
+     mingw-w64-ucrt-x86_64-openblas \
+     mingw-w64-ucrt-x86_64-fftw \
+     mingw-w64-ucrt-x86_64-hdf5 \
+     mingw-w64-ucrt-x86_64-pkgconf \
+     mingw-w64-ucrt-x86_64-ntldd \
+     mingw-w64-ucrt-x86_64-binutils
+   ```
+
+### Build Steps
+
+```bash
+# 1. Navigate to QE source directory
+cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5
+
+# 2. Apply required patches
+PATCH_DIR="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/patches"
+patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch"
+patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch"
+patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch"
+patch -Nbp1 -i "$PATCH_DIR/005-fix-xmltools-eof-rewind.patch"
+patch -Nbp1 -i "$PATCH_DIR/006-fix-empty-tag-robust-mingw.patch"
+patch -Nbp1 -i "$PATCH_DIR/007-fix-i2c-mingw-empty-string.patch"
+
+# 3. Set production compiler flags (PRODUCTION-SAFE)
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
+export CFLAGS="-O2 -Wno-incompatible-pointer-types"
+export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
+export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5/artifacts"
+
+# 4. Configure
+./configure \
+  MPIF90=gfortran \
+  BLAS_LIBS="-lopenblas" \
+  LAPACK_LIBS="-lopenblas" \
+  FFT_LIBS="-lfftw3 -lfftw3_omp" \
+  DFLAGS="-D_WIN32 -D__FFTW3" \
+  --enable-openmp \
+  --prefix="$QE_PREFIX"
+
+# 5. Build (single-threaded to avoid race conditions)
+make veryclean
+make -j1
+
+# 6. Install
+make install
+
+# 7. Stage executables and DLLs (from PowerShell)
+cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw
+powershell -Command ".\scripts\stage_qe_dlls.ps1"
+
+# 8. Test (critical: test with multiple threads!)
+export OMP_NUM_THREADS=4
+cd dist/win-mingw
+./pw.exe -in scf-cg.in > scf-cg.out 2>&1
+tail -20 scf-cg.out
+```
+
+**Important Notes:**
+- **Always use UCRT64 packages** (`mingw-w64-ucrt-x86_64-*`), not mingw64
+- **Stack reserve is critical**: `-Wl,--stack,268435456` (256MB) is required
+- **Test with OMP_NUM_THREADS>1** before declaring success
+- **Patches 005-007 are required** for MinGW robustness (UPF v2 parsing)
+
+---
+
+## Production Build Guide
+
+### Prerequisites
+
+#### 1. Install MSYS2
 
 Install MSYS2 using Chocolatey:
 ```powershell
@@ -13,20 +99,18 @@ choco install msys2
 
 Or download and install manually from: https://www.msys2.org/
 
-### 2. Install Required Packages
+#### 2. Install Required Packages
 
-Open **MSYS2 MinGW 64-bit terminal** (not the regular MSYS2 terminal) and run:
+Open **MSYS2 UCRT64 terminal** (not the regular MSYS2 terminal) and run:
 
 ```bash
-
-
-# Install required packages
+# Update package database
 pacman -Syu
 
-# 基础工具（MSYS 里的，不分前缀）
+# Install base development tools (MSYS packages, no prefix)
 pacman -S --needed base-devel git wget patch make pkgconf
 
-# UCRT64 toolchain + libs（全部 ucrt 前缀）
+# Install UCRT64 toolchain and libraries (all ucrt64-prefixed)
 pacman -S --needed \
   mingw-w64-ucrt-x86_64-toolchain \
   mingw-w64-ucrt-x86_64-gcc-fortran \
@@ -34,14 +118,15 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-fftw \
   mingw-w64-ucrt-x86_64-hdf5 \
   mingw-w64-ucrt-x86_64-pkgconf \
-  mingw-w64-ucrt-x86_64-ntldd
+  mingw-w64-ucrt-x86_64-ntldd \
+  mingw-w64-ucrt-x86_64-binutils
 ```
 
-## Building QE Locally
+**Critical:** Use **UCRT64** packages (`mingw-w64-ucrt-x86_64-*`), not mingw64. MSYS2 environments are separate and do not share packages.
 
 ### Step 1: Download and Extract QE Source
 
-In the MSYS2 MinGW 64-bit terminal:
+In the MSYS2 UCRT64 terminal:
 
 ```bash
 # Create upstream directory (adjust path as needed)
@@ -58,61 +143,51 @@ if [ ! -f "qe.tar.gz" ]; then
 fi
 
 # Extract (if not already extracted)
-if [ ! -d "qe" ]; then
+if [ ! -d "q-e-qe-7.5" ]; then
     tar -xzf qe.tar.gz
     EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-${QE_VERSION}*" | head -1)
     if [ -n "$EXTRACTED" ]; then
-        mv "$EXTRACTED" qe
+        mv "$EXTRACTED" q-e-qe-7.5
     fi
 fi
 
-cd qe
+cd q-e-qe-7.5
 ```
 
-### Step 2: Apply Patches (optional)
+### Step 2: Apply Required Patches
 
 Apply the MinGW-specific patches from the repository:
 
 ```bash
 # Navigate to QE source directory
-cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/qe
+cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5
 
 # Set patch directory
-$PATCH_DIR="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/patches"
+PATCH_DIR="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/patches"
 
-# Apply patch 001: use-srand-instead-of-srandom
-patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch" || echo "Patch 001: may already be applied"
-
-# Note: Patches 002-004 are for CMake builds and may not be needed for configure builds
-# Apply them if you encounter issues:
-# important!
+# Apply patches (use -N to skip if already applied)
+patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch"
 patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch"
-# patch -Nbp1 -i "$PATCH_DIR/003-fix-install-c-libraries.patch"
 patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch"
 
-# Apply patch 005: Fix XML/UPF parsing crash (defensive EOF rewind)
-# This prevents "Read past ENDFILE record" crash when reading UPF v2 files
-# See "Known Issues" section for details
+# Critical MinGW robustness fixes for UPF v2 parsing
 patch -Nbp1 -i "$PATCH_DIR/005-fix-xmltools-eof-rewind.patch"
+patch -Nbp1 -i "$PATCH_DIR/006-fix-empty-tag-robust-mingw.patch"
+patch -Nbp1 -i "$PATCH_DIR/007-fix-i2c-mingw-empty-string.patch"
 ```
+
+**Why patches 005-007 are required:** These fix MinGW gfortran-specific issues with allocatable CHARACTER functions that cause UPF v2 parsing to fail. See Appendix A for details.
 
 ### Step 3: Configure QE
 
-Configure QE using the traditional `./configure` script:
+Configure QE using the traditional `./configure` script with production-safe flags:
 
 ```bash
-# Set compiler flags to suppress warnings
-# Add -g -fbacktrace for debugging XML parsing issues (can be removed for production builds)
-export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz"
+# Production-safe compiler flags (see "Compiler Flags Reference" below)
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
 export CFLAGS="-O2 -Wno-incompatible-pointer-types"
-export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/qe/artifacts"
-#export FFT_CFLAGS="$(pkg-config --cflags fftw3)"
-#export FFT_LIBS="$(pkg-config --libs fftw3)"
 export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
-# export FCFLAGS="-O2 -fopenmp"
-
-# 可选：如果你想用 fftw threads
-# export FFT_LIBS="$(pkg-config --libs fftw3 fftw3_threads)"
+export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5/artifacts"
 
 ./configure \
   MPIF90=gfortran \
@@ -124,52 +199,46 @@ export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
   --prefix="$QE_PREFIX"
 ```
 
-**Configuration options:**
-- The configuration should either detect external fftw3 automatically, or fall back to internal FFTW. Either way ok. Problem arises if user passes FFT_LIBS to configure (for example if one wants to pass -lfftw3_omp), then it will fail to decide, and neither -D__FFTW nor -D__FFTW3 flag will be set in DFLAGS, resulting in compilation error (cannot find some fftw include files). Therefore, the user should set -D__FFTW3 flag manually, signaling external FFTW3 usage. 
-- `F90=gfortran`: Use gfortran as Fortran compiler
+**Configuration options explained:**
 - `MPIF90=gfortran`: Use gfortran for MPI (serial build)
 - `BLAS_LIBS="-lopenblas"`: Link against OpenBLAS
 - `LAPACK_LIBS="-lopenblas"`: Use OpenBLAS for LAPACK
+- `FFT_LIBS="-lfftw3 -lfftw3_omp"`: Use external FFTW3 with OpenMP support
+- `DFLAGS="-D_WIN32 -D__FFTW3"`: Windows-specific flags and external FFTW3
 - `--enable-openmp`: Enable OpenMP support
 
+**Important:** When passing `FFT_LIBS` to configure, you must also set `-D__FFTW3` in `DFLAGS` manually. Otherwise configure may fail to set the FFT backend macro, resulting in compilation errors.
 
 ### Step 4: Build QE
 
-Build the desired targets:
+Build with single-threaded make to avoid race conditions:
 
 ```bash
-# Build all executables
-# !!! should only use make pw -j1 due to competition problem
-# make -j$(nproc)
+# Clean previous build
+make veryclean
+
+# Build (single-threaded to avoid module file race conditions)
 make -j1
-# Or build specific targets (e.g., pw.x)
-# !!! should only use make pw -j1 due to competition problem
-# make pw -j$(nproc)
+
+# Or build specific target (e.g., pw.x)
 make pw -j1
 ```
 
-### Cleanly build QE (if things go wrong):
-```bash
-make veryclean 2>/dev/null || make clean
-./configure ...（你原来的参数）...
-make -j
-```
-### Step 5: Install (Optional)
+**Why `-j1`:** Fortran module files can have race conditions during parallel builds. Single-threaded builds are more reliable.
 
-Install to a prefix directory:
+### Step 5: Install
+
+Install to the prefix directory:
 
 ```bash
-# Set installation prefix
-# make install PREFIX="$QE_PREFIX"
-make install 
-
-export QE_BIN="$USERPROFILE/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/dist/win-mingw"
-export PATH="$QE_BIN:$PATH"
+make install
 ```
+
+Executables will be installed to `$QE_PREFIX/bin/` (e.g., `artifacts/bin/pw.x`).
 
 ### Step 6: Stage Executables and Required DLLs
 
-After building and installing, you need to stage the executables and required DLLs to a clean distribution directory. Use the staging script:
+After building and installing, stage the executables and required DLLs to a clean distribution directory using the staging script:
 
 **From PowerShell:**
 ```powershell
@@ -184,13 +253,10 @@ cd toolchains\quantum_espresso\windows\mingw
 
 **What the staging script does:**
 
-1. **Finds executables**: Recursively searches for all `*.x` files in the artifacts directory (handles both `artifacts\bin` and `artifacts` root).
-
-2. **Copies to distribution directory**: Copies all `*.x` files to `dist\win-mingw` in a flat layout (no subdirectories).
-
-3. **Renames to .exe**: Renames all copied `*.x` files to `*.exe` in the distribution directory (e.g., `pw.x` → `pw.exe`).
-
-4. **Copies required DLLs**: Copies required runtime DLLs from MSYS2 UCRT64 bin directory to the distribution directory.
+1. **Finds executables**: Recursively searches for all `*.x` files in the artifacts directory
+2. **Copies to distribution directory**: Copies all `*.x` files to `dist\win-mingw` in a flat layout
+3. **Renames to .exe**: Renames all copied `*.x` files to `*.exe` (e.g., `pw.x` → `pw.exe`)
+4. **Copies required DLLs**: Copies required runtime DLLs from MSYS2 UCRT64 bin directory
 
 **MSYS2 UCRT64 directory detection:**
 
@@ -231,41 +297,135 @@ The staging script uses a fixed, practical DLL list rather than automatic detect
 pacman -S mingw-w64-ucrt-x86_64-ntldd
 ```
 
-## Running and testing QE
+### Step 7: Verify Build
 
-### From powershell
+**Verify stack reserve size:**
+```bash
+objdump -x artifacts/bin/pw.x | grep -i SizeOfStackReserve
+# Should show: SizeOfStackReserve 0000000010000000 (256MB)
+```
+
+**Verify which binary you're running:**
+```bash
+which pw.exe
+ls -lh "$(which pw.exe)"
+```
+
+**Test with multiple threads (critical!):**
+```bash
+export OMP_NUM_THREADS=4
+cd dist/win-mingw
+./pw.exe -in scf-cg.in > scf-cg.out 2>&1
+tail -20 scf-cg.out
+```
+
+---
+
+## Compiler Flags Reference
+
+### Production-Safe Flags
+
+These flags are safe for production builds and OpenMP execution:
+
+**FFLAGS (Production):**
+```bash
+-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0
+```
+
+- `-O2`: Optimization level 2
+- `-fopenmp`: Enable OpenMP support
+- `-Wno-missing-include-dirs`: Suppress missing include directory warnings
+- `-w`: Suppress all warnings
+- `-std=legacy`: Use legacy Fortran standard (for compatibility)
+- `-fallow-argument-mismatch`: Allow BLAS argument type mismatches
+- `-fallow-invalid-boz`: Allow invalid binary/octal/hexadecimal constants
+- `-fmax-stack-var-size=0`: Push large automatic arrays off stack (Windows-specific)
+
+**CFLAGS (Production):**
+```bash
+-O2 -Wno-incompatible-pointer-types
+```
+
+- `-O2`: Optimization level 2
+- `-Wno-incompatible-pointer-types`: Suppress incompatible pointer type warnings
+
+**LDFLAGS (Production):**
+```bash
+-Wl,--stack,268435456 -fopenmp
+```
+
+- `-Wl,--stack,268435456`: Set stack reserve to 256MB (critical for Windows)
+- `-fopenmp`: Link OpenMP runtime
+
+### Debug-Only Flags (NOT OpenMP Safe)
+
+**⚠️ WARNING:** These flags are useful for single-threaded debugging but can destabilize OpenMP execution with multiple threads. Do NOT use in production builds.
+
+**Debug flags (single-thread only):**
+```bash
+-g -fbacktrace -fcheck=all -finit-character=0 -finit-local-zero -ffpe-trap=invalid,zero,overflow
+```
+
+- `-g`: Include debug symbols
+- `-fbacktrace`: Enable backtrace on runtime errors
+- `-fcheck=all`: Enable all runtime checks (bounds, pointers, memory, etc.)
+- `-finit-character=0`: Initialize CHARACTER variables to null
+- `-finit-local-zero`: Initialize local variables to zero
+- `-ffpe-trap=invalid,zero,overflow`: Trap floating-point exceptions
+
+**Known issue with debug flags:**
+
+Using `-fcheck=all` or `-ffpe-trap` with `OMP_NUM_THREADS>1` can cause false "recursive call" errors in XC routines (e.g., `slater`, `pz`). These routines are not recursive; the error is a false positive from runtime checks under OpenMP.
+
+**Recommendation:** Use debug flags only for single-threaded diagnosis. Always validate production builds with `OMP_NUM_THREADS>1`.
+
+---
+
+## Running and Testing QE
+
+### From PowerShell
 
 ```powershell
 $env:PATH="$HOME\qmatsuite-toolchain\toolchains\quantum_espresso\windows\mingw\dist\win-mingw;$env:PATH"
 pw.exe -in si100.in > "si100_mingw_omp1.out" 2>&1
 ```
 
-### From MSYS2 MinGW Terminal
+### From MSYS2 UCRT64 Terminal
 
 ```bash
-# Navigate to bin directory
-cd /c/qe-install/bin
+# Navigate to distribution directory
+cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/dist/win-mingw
 
 # Run QE
-./pw.x < input.in > output.out
+./pw.exe -in input.in > output.out 2>&1
 ```
 
 ### From Windows Command Prompt
 
-1. Navigate to the installation directory:
+1. Navigate to the distribution directory:
    ```cmd
-   cd C:\qe-install\bin
+   cd C:\Users\%USERNAME%\qmatsuite-toolchain\toolchains\quantum_espresso\windows\mingw\dist\win-mingw
    ```
 
 2. Run QE:
    ```cmd
-   pw.x < input.in > output.out
+   pw.exe -in input.in > output.out 2>&1
    ```
 
-**Note:** Make sure all required DLLs are in the same directory as the executables, or add the MinGW bin directory to your PATH:
-```cmd
-set PATH=%PATH%;C:\tools\msys64\mingw64\bin
+**Note:** All required DLLs are in the same directory as the executables, so no PATH modification is needed.
+
+### Testing with Multiple Threads
+
+**Critical:** Always test with `OMP_NUM_THREADS>1` to verify OpenMP stability:
+
+```bash
+export OMP_NUM_THREADS=4
+pw.exe -in scf-cg.in > scf-cg.out 2>&1
 ```
+
+If the build works with `OMP_NUM_THREADS=1` but fails with `OMP_NUM_THREADS>=2`, check for debug flags in your build configuration.
+
+---
 
 ## Required DLLs
 
@@ -286,18 +446,18 @@ The following DLLs are automatically staged by `stage_qe_dlls.ps1` from MSYS2 UC
 
 **Note:** The `stage_qe_dlls.ps1` script automatically copies all required DLLs to the distribution directory. No manual copying is needed.
 
-
+---
 
 ## Troubleshooting
 
 ### Build Errors
 
-1. **Compiler not found**: Ensure you're using MSYS2 MinGW 64-bit terminal, not the regular MSYS2 terminal.
+1. **Compiler not found**: Ensure you're using MSYS2 UCRT64 terminal, not the regular MSYS2 terminal.
 
 2. **Library not found**: Check that all required packages are installed:
    ```bash
-   pacman -Qs mingw-w64-x86_64-openblas
-   pacman -Qs mingw-w64-x86_64-fftw
+   pacman -Qs mingw-w64-ucrt-x86_64-openblas
+   pacman -Qs mingw-w64-ucrt-x86_64-fftw
    ```
 
 3. **Patch application fails**: Patches may already be applied. Use `-N` flag to skip if already applied.
@@ -315,18 +475,16 @@ fft_scalar.f90: fatal error: #error No fft_scalar backend selected!
 
 **Fix:**
 ```bash
-# Ensure FFTW3 is installed in the same MSYS2 prefix
-pacman -S mingw-w64-x86_64-fftw
+# Ensure FFTW3 is installed in UCRT64
+pacman -S --needed mingw-w64-ucrt-x86_64-fftw
 
-# Use pkg-config to get correct flags
-export FFT_CFLAGS="$(pkg-config --cflags fftw3)"
-export FFT_LIBS="$(pkg-config --libs fftw3)"
+# Verify FFTW3 is available
+pkg-config --libs fftw3
 
-# Reconfigure with explicit FFT flags
-./configure \
-  FFT_LIBS="$FFT_LIBS" \
-  CPPFLAGS="$FFT_CFLAGS" \
-  ... (other options)
+# Reconfigure with explicit FFT flags and DFLAGS
+export FFT_LIBS="-lfftw3 -lfftw3_omp"
+export DFLAGS="-D_WIN32 -D__FFTW3"
+./configure ... (other options) ...
 ```
 
 **Verification:**
@@ -348,7 +506,7 @@ ptoolkit.f90: error: Type mismatch in argument 'c' at (1) (COMPLEX(8)/REAL(8))
 **Fix:**
 ```bash
 # Add -fallow-argument-mismatch to Fortran flags
-export FFLAGS="-Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz"
+export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
 
 # Reconfigure and rebuild
 make veryclean
@@ -397,13 +555,89 @@ grep -E "F90FLAGS.*-J|FFLAGS.*-J" make.inc
 
 ### Runtime Errors
 
-1. **DLL not found**: Copy required DLLs to the executable directory or add MinGW bin to PATH.
+1. **DLL not found**: Ensure all required DLLs are in the same directory as the executables. The staging script should have copied them automatically.
 
 2. **Path issues**: Use forward slashes in MSYS2 terminal, or use Windows paths with proper escaping.
 
-## Windows: MSYS2 UCRT64 (gfortran) Build - Complete Failure Timeline
+3. **Stack overflow (0xC00000FD)**: Verify stack reserve size:
+   ```bash
+   objdump -x pw.exe | grep -i SizeOfStackReserve
+   # Should show: SizeOfStackReserve 0000000010000000 (256MB)
+   ```
+   If it shows `0000000000200000` (2MB), rebuild with `-Wl,--stack,268435456` in LDFLAGS.
 
-This section documents the complete journey from initial build attempts to a working production configuration, including all major failures, diagnostic steps, and fixes. This is essential reading for anyone reproducing the build end-to-end.
+4. **Wrong binary being run**: Always verify which binary you're executing:
+   ```bash
+   which pw.exe
+   ls -lh "$(which pw.exe)"
+   ```
+
+---
+
+## Known Issues
+
+### UPF/XML Parsing Crash - RESOLVED
+
+**Status:** Fixed via patches 005, 006, and 007. See Appendix A for full details.
+
+The issue was caused by MinGW gfortran mishandling allocatable CHARACTER function returns in tag construction. The fix replaces allocatable functions with fixed-length buffer subroutines.
+
+**Required patches:**
+- `005-fix-xmltools-eof-rewind.patch` — defensive EOF rewind fix
+- `006-fix-empty-tag-robust-mingw.patch` — `capitalize_if_v2` fix
+- `007-fix-i2c-mingw-empty-string.patch` — `i2c()` fix and tag construction updates
+
+**Symptom (before fix):**
+
+On Windows MSYS2 UCRT64 (gfortran), both the MSYS2 pacman-installed `pw.exe` and locally compiled `pw.x` would fail when reading UPF v2 pseudopotentials with:
+
+```
+end of file reached, tag  not found
+end of file reached, tag not found
+At line 1081 of file xmltools.f90
+Fortran runtime error: Read past ENDFILE record
+```
+
+**Solution:** Apply patches 005-007 before building. These patches are now part of the standard build process.
+
+---
+
+## Patches
+
+The build process uses patches to fix MinGW-specific build issues. These patches are stored locally in `toolchains/quantum_espresso/windows/mingw/patches/`.
+
+**Required patches:**
+- `001-use-srand-instead-of-srandom.patch` - Use `srand` instead of `srandom` (Windows compatibility)
+- `002-fix-build-devxlib-on-mingw.patch` - Fix devxlib build on MinGW
+- `004-fix-executable-suffix-on-mingw.patch` - Fix executable suffix handling
+- `005-fix-xmltools-eof-rewind.patch` - Defensive EOF rewind fix (UPF parsing)
+- `006-fix-empty-tag-robust-mingw.patch` - Fix allocatable CHARACTER bug (UPF parsing)
+- `007-fix-i2c-mingw-empty-string.patch` - Fix `i2c()` allocatable CHARACTER bug (UPF parsing)
+
+See `toolchains/quantum_espresso/windows/mingw/patches/README.md` for details about each patch.
+
+---
+
+## CI Build (CMake)
+
+The CI workflow (`.github/workflows/qe-windows-mingw.yml`) uses CMake instead of the configure script. For CMake-based builds, see the workflow file for the exact configuration options used.
+
+---
+
+## Migration from Intel oneAPI
+
+This toolchain replaces the previous Intel oneAPI/ifort/MS-MPI based Windows builds. The MinGW-w64 toolchain provides:
+
+- Open-source compiler (gfortran)
+- No proprietary dependencies
+- Better compatibility with open-source scientific software
+- Easier redistribution (no Intel license restrictions)
+
+---
+
+## Appendix A: Complete Failure Timeline and Postmortem
+
+This appendix documents the complete journey from initial build attempts to a working production configuration, including all major failures, diagnostic steps, and fixes. This is essential reading for understanding why each step exists and for debugging similar issues.
 
 ### Phase 0: Initial Symptom - Runtime "Silent Crash"
 
@@ -736,278 +970,7 @@ These debug flags are fine for single-thread diagnosis but can destabilize OpenM
 
 ---
 
-### Final: Known-Good Production Configuration
-
-**MSYS2 UCRT64 Package Set (ucrt64-prefixed, not mixed mingw64):**
-
-```bash
-pacman -S --needed \
-  base-devel git wget patch make pkgconf \
-  mingw-w64-ucrt-x86_64-toolchain \
-  mingw-w64-ucrt-x86_64-gcc-fortran \
-  mingw-w64-ucrt-x86_64-openblas \
-  mingw-w64-ucrt-x86_64-fftw \
-  mingw-w64-ucrt-x86_64-hdf5 \
-  mingw-w64-ucrt-x86_64-pkgconf \
-  mingw-w64-ucrt-x86_64-ntldd \
-  mingw-w64-ucrt-x86_64-binutils
-```
-
-**Configure Invocation (OpenBLAS + FFTW3 + OpenMP):**
-
-```bash
-export FFLAGS="-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0"
-export CFLAGS="-O2 -Wno-incompatible-pointer-types"
-export LDFLAGS="-Wl,--stack,268435456 -fopenmp"
-export QE_PREFIX="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/qe/artifacts"
-
-./configure \
-  MPIF90=gfortran \
-  BLAS_LIBS="-lopenblas" \
-  LAPACK_LIBS="-lopenblas" \
-  FFT_LIBS="-lfftw3 -lfftw3_omp" \
-  DFLAGS="-D_WIN32 -D__FFTW3" \
-  --enable-openmp \
-  --prefix="$QE_PREFIX"
-```
-
-**Production FFLAGS/FCFLAGS/LDFLAGS (no debug flags):**
-
-- **FFLAGS**: `-O2 -fopenmp -Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fmax-stack-var-size=0`
-- **CFLAGS**: `-O2 -Wno-incompatible-pointer-types`
-- **LDFLAGS**: `-Wl,--stack,268435456 -fopenmp`
-
-**Do NOT include:**
-- `-fcheck=all` (runtime checks)
-- `-ffpe-trap=invalid,zero,overflow` (floating-point traps)
-- `-finit-character=0 -finit-local-zero` (initialization flags)
-- `-g -fbacktrace` (debug symbols - only for debugging)
-
-**Minimal Runtime Test:**
-
-```bash
-# Test with multiple threads (critical!)
-export OMP_NUM_THREADS=4
-pw.x -in scf-cg.in > scf-cg.out 2>&1
-
-# Verify it completes successfully
-tail -20 scf-cg.out
-```
-
-**Apply Required Patches:**
-
-```bash
-cd /c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/upstream/q-e-qe-7.5
-PATCH_DIR="/c/Users/$(whoami)/qmatsuite-toolchain/toolchains/quantum_espresso/windows/mingw/patches"
-
-patch -Nbp1 -i "$PATCH_DIR/001-use-srand-instead-of-srandom.patch"
-patch -Nbp1 -i "$PATCH_DIR/002-fix-build-devxlib-on-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/004-fix-executable-suffix-on-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/005-fix-xmltools-eof-rewind.patch"
-patch -Nbp1 -i "$PATCH_DIR/006-fix-empty-tag-robust-mingw.patch"
-patch -Nbp1 -i "$PATCH_DIR/007-fix-i2c-mingw-empty-string.patch"
-```
-
-**Build:**
-
-```bash
-make veryclean
-make -j1  # Single-threaded build to avoid race conditions
-```
-
-**Verify Stack Reserve:**
-
-```bash
-objdump -x artifacts/bin/pw.x | grep -i SizeOfStackReserve
-# Should show: SizeOfStackReserve 0000000010000000 (256MB)
-```
-
----
-
-## Known Issues
-
-### UPF/XML Parsing Crash on MinGW gfortran Builds (UCRT64) - RESOLVED
-
-**Status:** Fixed via patches 005, 006, and 007. See "Windows: MSYS2 UCRT64 (gfortran) Build - Complete Failure Timeline" section above for full details.
-
-The issue was caused by MinGW gfortran mishandling allocatable CHARACTER function returns in tag construction. The fix replaces allocatable functions with fixed-length buffer subroutines.
-
-**Required patches:**
-- `005-fix-xmltools-eof-rewind.patch` — defensive EOF rewind fix
-- `006-fix-empty-tag-robust-mingw.patch` — `capitalize_if_v2` fix
-- `007-fix-i2c-mingw-empty-string.patch` — `i2c()` fix and tag construction updates
-
-**Symptom:**
-
-On Windows MSYS2 UCRT64 (gfortran), both the MSYS2 pacman-installed `pw.exe` and locally compiled `pw.x` fail when reading UPF v2 pseudopotentials.
-
-The run prints the QE header and "Current dimensions ..." then fails with:
-
-```
-end of file reached, tag not found
-end of file reached, tag not found
-At line 1081 of file xmltools.f90
-Fortran runtime error: Read past ENDFILE record
-```
-
-**Minimal Reproduction:**
-
-1. Create a simple SCF calculation input file (`scf-cg.in`) that uses a UPF v2 pseudopotential:
-   ```fortran
-   &CONTROL
-     calculation = 'scf'
-   /
-   &SYSTEM
-     ibrav = 0
-     nat = 1
-     ntyp = 1
-     ecutwfc = 30.0
-   /
-   ATOMIC_SPECIES
-   Si 28.085 Si.pbe-n-rrkjus_psl.1.0.0.UPF
-   ATOMIC_POSITIONS angstrom
-   Si 0.0 0.0 0.0
-   K_POINTS gamma
-   ```
-
-2. Place a valid UPF v2 file (e.g., `Si.pbe-n-rrkjus_psl.1.0.0.UPF`) in the same directory.
-
-3. Run:
-   ```bash
-   pw.x -in scf-cg.in
-   ```
-
-4. The crash occurs during pseudopotential reading, after printing QE dimensions.
-
-**Note:** The UPF file itself is valid (works with Intel oneAPI builds and other QE binaries on the same machine). Running `dos2unix` on the UPF file does not fix the issue.
-
-**Root Cause:**
-
-The issue has two parts:
-
-**Part 1: Empty Tag Bug (Primary Issue)**
-
-The error message shows `"end of file reached, tag  not found"` with **two spaces** between "tag" and "not", indicating that `trim(tag)` is **empty**. This means `xmlr_opentag()` is being called with an empty or whitespace-only tag string.
-
-When `xmlr_opentag()` receives an empty tag:
-- `len_trim(tag) == 0`, so `lt = 0`
-- The search pattern becomes `'<'//trim(tag)` which is just `'<'` (matches any opening tag)
-- This corrupts the `open_tags` tracking and causes incorrect parsing
-
-**Part 2: EOF Handling Bug (Secondary Issue)**
-
-Even after the empty tag issue, there's a secondary bug in `upflib/xmltools.f90`:
-
-1. **Line 1081**: `read(xmlunit,'(a)', end=10) line` reads from the XML file until EOF, then jumps to label 10.
-
-2. **Label 10 (lines 1205-1219)**: When EOF is reached and the tag is not found:
-   - If `ierr` parameter is **present**: The subroutine sets `ierr=1`, rewinds the file unit, and retries (if `ntry == 1`).
-   - If `ierr` parameter is **absent**: The subroutine only prints the error message `'end of file reached, tag ... not found'` but **does NOT rewind** the file unit.
-
-3. **Problem**: When `ierr` is not present, the file unit remains at EOF. The next call to `xmlr_opentag()` (or any read operation) attempts to read from EOF, causing the "Read past ENDFILE record" crash.
-
-**Evidence:**
-
-Examine the code around the EOF handling:
-
-```bash
-# Show the problematic read statement
-nl -ba upflib/xmltools.f90 | sed -n '1070,1100p'
-
-# Show the EOF handling (label 10)
-nl -ba upflib/xmltools.f90 | sed -n '1200,1220p'
-```
-
-You will see:
-- Line 1081: `read(xmlunit,'(a)', end=10) line` - reads until EOF
-- Lines 1205-1215: Label 10 only rewinds if `ierr` is present
-
-**Diagnosis Steps:**
-
-1. Verify the UPF file format:
-   ```bash
-   head -1 Si.pbe-n-rrkjus_psl.1.0.0.UPF
-   # Should show: <UPF version="2.0.1"> or similar
-   ```
-
-2. Check maximum line length (should be << 1024 characters):
-   ```bash
-   awk '{print length}' Si.pbe-n-rrkjus_psl.1.0.0.UPF | sort -n | tail -1
-   ```
-
-3. Search for calls to `xmlr_opentag` that don't pass `ierr`:
-   ```bash
-   grep -n "xmlr_opentag" upflib/read_upf_new.f90 | grep -v "IERR"
-   ```
-
-   Many calls in `read_upf_new.f90` omit the `ierr` parameter (e.g., line 178: `CALL xmlr_opentag( capitalize_if_v2('pp_header') )`).
-
-**Diagnostic Guards Added:**
-
-The source code has been updated with diagnostic guards to catch empty tag calls:
-
-1. **Guard in `xmlr_opentag()`**: Detects when an empty or whitespace-only tag is passed and prints diagnostic information including:
-   - The tag value (with brackets to show whitespace)
-   - Current XML parsing state (xmlunit, nlevel, open_tags)
-   - Error code 5 is returned if `ierr` is present
-   - `ERROR STOP` is called if `ierr` is not present (compile with `-g -fbacktrace` for stack trace)
-
-2. **Guard in `capitalize_if_v2()`**: Detects when an empty string is passed and prints a warning.
-
-**To enable stack traces for debugging:**
-
-Add `-g -fbacktrace` to FFLAGS when configuring:
-```bash
-export FFLAGS="-Wno-missing-include-dirs -w -std=legacy -fallow-argument-mismatch -fallow-invalid-boz -fopenmp -fmax-stack-var-size=0 -g -fbacktrace"
-```
-
-**Recommended Next Actions:**
-
-1. **Rebuild with debugging flags** and run the failing test to capture the diagnostic output:
-   ```bash
-   # Rebuild with -g -fbacktrace
-   make veryclean
-   ./configure ... (your options) ...
-   make -j1
-   
-   # Run the test
-   pw.x -in scf-cg.in
-   ```
-
-2. **Analyze the diagnostic output** to identify:
-   - Which call site passes an empty tag
-   - The XML parsing state when it happens
-   - The stack trace (if compiled with `-fbacktrace`)
-
-3. **Fix the call site** that passes an empty tag:
-   - Ensure tag variables are always initialized before use
-   - Check if `capitalize_if_v2()` is being called with an empty string
-   - Verify that string concatenations (e.g., `'PP_TAG.'//i2c(n)`) never result in empty strings
-
-4. **Apply defensive patches**:
-   - **Patch 005**: Fixes EOF handling (rewind on EOF even without `ierr`)
-   - The empty tag guard will help identify the root cause
-
-5. **Further Investigation**: Once the empty tag source is identified, investigate why it's empty:
-   - Is a tag variable uninitialized in some code path?
-   - Does `capitalize_if_v2()` return empty in some case?
-   - Is there a string concatenation that fails on MinGW?
-   - Are there MinGW-specific character handling differences?
-
-**Workaround:**
-
-Until the root cause is fixed, you can:
-- Use UPF v1 format pseudopotentials (if available)
-- Use pseudopotentials in other formats (e.g., PSML) that don't trigger this code path
-- Apply the defensive patch above to prevent the crash (though the "tag not found" issue will still occur)
-
-**Files Referenced:**
-
-- `upflib/xmltools.f90` - Contains `xmlr_opentag()` subroutine with EOF handling bug
-- `upflib/read_upf_new.f90` - Contains many calls to `xmlr_opentag()` without `ierr` parameter
-- `upflib/wxml.f90` - File open routine (check for Windows-specific OPEN options if relevant)
-
-## MSYS2/MinGW QE can crash with STACK_OVERFLOW (0xC00000FD) — fix is linker stack reserve
+## Appendix B: Stack Overflow Investigation
 
 ### Symptom
 
@@ -1105,22 +1068,3 @@ If QE appears to "hang" early:
    If it shows `0000000000200000` (2MB), that's the problem.
 
 **Recommendation:** Do not rely on the stock MSYS2 QE package for production; rebuild with `--stack` flag.
-
-## Patches
-
-The build process uses patches from the [MSYS2 MINGW-packages repository](https://github.com/msys2/MINGW-packages/tree/master/mingw-w64-quantum-espresso) to fix MinGW-specific build issues. These patches are stored locally in `toolchains/quantum_espresso/windows/mingw/patches/`.
-
-See `toolchains/quantum_espresso/windows/mingw/patches/README.md` for details about each patch.
-
-## CI Build (CMake)
-
-The CI workflow (`.github/workflows/qe-windows-mingw.yml`) uses CMake instead of the configure script. For CMake-based builds, see the workflow file for the exact configuration options used.
-
-## Migration from Intel oneAPI
-
-This toolchain replaces the previous Intel oneAPI/ifort/MS-MPI based Windows builds. The MinGW-w64 toolchain provides:
-
-- Open-source compiler (gfortran)
-- No proprietary dependencies
-- Better compatibility with open-source scientific software
-- Easier redistribution (no Intel license restrictions)
