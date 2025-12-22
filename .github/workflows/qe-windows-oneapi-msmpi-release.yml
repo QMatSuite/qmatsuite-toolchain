@@ -312,13 +312,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: false
-
+          
+      - name: Debug Trusted Signing inputs (safe)
+        shell: pwsh
+        run: |
+          "ENDPOINT = '${{ vars.TRUSTEDSIGN_ENDPOINT }}'"
+          "ACCOUNT  = '${{ vars.TRUSTEDSIGN_ACCOUNT }}'"
+          "PROFILE  = '${{ vars.TRUSTEDSIGN_CERT_PROFILE }}'"
+        
       - name: Sign all executables with Trusted Signing
         uses: Azure/trusted-signing-action@v0
         with:
-          endpoint: ${{ secrets.TRUSTEDSIGN_ENDPOINT }}
-          trusted-signing-account-name: ${{ secrets.TRUSTEDSIGN_ACCOUNT }}
-          certificate-profile-name: ${{ secrets.TRUSTEDSIGN_CERT_PROFILE }}
+          endpoint: ${{ vars.TRUSTEDSIGN_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTEDSIGN_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTEDSIGN_CERT_PROFILE }}
           files-folder: dist/win-oneapi-msmpi
           files-folder-filter: exe
           files-folder-recurse: true
