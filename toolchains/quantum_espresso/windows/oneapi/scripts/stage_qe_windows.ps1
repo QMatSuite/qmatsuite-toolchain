@@ -408,6 +408,17 @@ function Find-BuildDirectory {
     return $DefaultBuildDir
 }
 
+function Get-CMakeCacheBool {
+    param(
+        [Parameter(Mandatory=$true)][string]$CachePath,
+        [Parameter(Mandatory=$true)][string]$Key
+    )
+    if (-not (Test-Path $CachePath)) { return $null }
+    $m = Select-String -Path $CachePath -Pattern ("^\s*" + [regex]::Escape($Key) + ":BOOL=") -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $m) { return $null }
+    return (($m.Line -split "=", 2)[1]).Trim()
+}
+
 function Detect-MPIFromBuild {
     param(
         [string]$BuildDir,
@@ -1959,6 +1970,7 @@ if ($actualBuildDir -ne $BuildDir) {
     $BuildDir = $actualBuildDir
 }
 
+
 # Detect MPI configuration from build
 $mpiConfig = Detect-MPIFromBuild -BuildDir $BuildDir -RepoRoot $RepoRoot
 if ($mpiConfig) {
@@ -2026,6 +2038,7 @@ if (-not (Test-Path $DistBinDir) -and -not $WhatIf) {
     New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
 }
 
+
 # Stage executables to dist/bin
 Write-Host "=== Staging executables ===" -ForegroundColor Cyan
 $stagedExeFiles = Stage-Executables -BinDir $BuildBin -DistBinDir $DistBinDir -Only $Only -WhatIf:$WhatIf
@@ -2046,6 +2059,32 @@ $stagedExePaths = $stagedExeFiles | ForEach-Object {
         }
     }
 } | Where-Object { $_ -ne $null }
+
+# --- libxc auto-stage (based on QE_ENABLE_LIBXC in CMakeCache.txt) ---
+$buildPath = Join-Path $RepoRoot $BuildDir
+$cmakeCache = Join-Path $buildPath "CMakeCache.txt"
+$libxcEnabled = Get-CMakeCacheBool -CachePath $cmakeCache -Key "QE_ENABLE_LIBXC"
+
+if ($libxcEnabled -eq "ON") {
+    Write-Host "libxc on (QE_ENABLE_LIBXC=ON) -> will stage libxc runtime bin/*" -ForegroundColor Green
+
+    $libxcBin = Join-Path $RepoRoot "upstream\libxc\install\bin"
+    if (-not (Test-Path $libxcBin)) {
+        throw "QE_ENABLE_LIBXC=ON but libxc bin dir not found: $libxcBin"
+    }
+
+    # Dist bin dir (use your existing dist root; keep consistent with your script)
+    New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
+
+    Copy-Item -Force -Path (Join-Path $libxcBin "*") -Destination $DistBinDir
+}
+elseif ($libxcEnabled -eq "OFF") {
+    Write-Host "libxc off (QE_ENABLE_LIBXC=OFF) -> skip libxc staging" -ForegroundColor DarkGray
+}
+else {
+    Write-Host "QE_ENABLE_LIBXC not found in CMakeCache.txt -> skip libxc staging" -ForegroundColor Yellow
+}
+# --- end libxc auto-stage ---
 
 # Layer 1: Recursive dumpbin dependency closure (static transitive closure)
 $dumpbinPath = Ensure-DumpbinInPath

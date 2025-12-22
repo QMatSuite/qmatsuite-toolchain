@@ -259,7 +259,10 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1" -NoPatch
-
+      - name: Refresh and build libxc
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\build_libxc_windows_oneapi.ps1"
       - name: Apply QE patches
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
@@ -272,9 +275,8 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" `
             -MakeTarget "$env:BUILD_MODE" `
-            -WithLibxc:$true
+            -WithLibxc
       
-
       - name: Stage QE executables and runtime DLLs
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
