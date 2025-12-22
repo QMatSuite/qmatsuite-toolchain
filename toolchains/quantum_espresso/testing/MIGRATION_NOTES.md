@@ -65,3 +65,4 @@ python scripts/qe_run_tests.py --qe-version qe-7.5 --build-dir /path/to/build --
 4. Consider adding parallel execution support
 5. Consider adding detailed output comparison
 
+

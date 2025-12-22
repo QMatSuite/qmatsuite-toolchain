@@ -69,6 +69,9 @@ This repository uses a vendor/submodule approach:
    - Download from: https://git-scm.com/download/win
    - Or install via Chocolatey: `choco install git`
 
+6. **pkgconfig** for LIBXC 
+   - Install via Chocolatey: `choco install pkgconfiglite`
+   
 ## CI/CD: Automated Build and Staging
 
 ### Standard CI Workflow

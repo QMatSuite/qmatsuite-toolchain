@@ -1,6 +1,6 @@
 # Quantum ESPRESSO Windows Build Script for Intel oneAPI
 # This script builds QE using Intel oneAPI compilers (ifx/icx) via CMake
-# Usage: .\scripts\build_qe_win_oneapi.ps1 [-NoMpi] [-QeSourceDir <path>] [-FftwVendor <Internal|Intel_FFTW3|Intel_DFTI|AUTO>]
+# Usage: .\scripts\build_qe_win_oneapi.ps1 [-NoMpi] [-WithLibxc] [-QeSourceDir <path>] [-FftwVendor <Internal|Intel_FFTW3|Intel_DFTI|AUTO>]
 #
 # Prerequisites:
 #   - QE source must be cloned from git (not a zip archive) with submodules initialized
@@ -18,7 +18,8 @@ param(
     [ValidateSet('Internal', 'Intel_FFTW3', 'Intel_DFTI', 'AUTO')]
     [string]$FftwVendor = "Intel_DFTI",  # FFT backend vendor (default: Intel_DFTI)
     [ValidateSet('pw', 'all')]
-    [string]$MakeTarget = "pw"  # Build target: 'pw' (pw only, default) or 'all' (all executables)
+    [string]$MakeTarget = "pw",  # Build target: 'pw' (pw only, default) or 'all' (all executables)
+    [switch]$WithLibxc = $false          # If specified, build with LibXC
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +38,8 @@ if ([System.IO.Path]::IsPathRooted($QeSourceDir)) {
 # Build directory is relative to QE source (not repo root)
 # Use separate build directory for MPI builds to avoid cache conflicts
 $buildDirSuffix = if ($NoMpi) { "build-win-oneapi" } else { "build-win-oneapi-msmpi" }
+$libxcOnOff = if ($WithLibxc) { "ON" } else {"OFF"}
+
 $BuildDir = Join-Path $QESource $buildDirSuffix
 
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -536,7 +539,13 @@ $cmakeConfigure = @(
     "-DQE_ENABLE_OPENMP=ON",           # Enable OpenMP
     "-DQE_ENABLE_SCALAPACK=OFF",       # Disable SCALAPACK for initial build
     "-DQE_ENABLE_HDF5=OFF",            # Disable HDF5 for initial build
-    "-DQE_ENABLE_LIBXC=ON",            # Enable LibXC for production
+    "-DQE_ENABLE_LIBXC=$libxcOnOff",            # Enable LibXC for production
+    "-DLibxc_DIR=`"$($QeSourceDir)\..\libxc\install\lib\cmake\Libxc`"",
+    "-DLIBXC_INCLUDE_DIR=`"$($QeSourceDir)\..\libxc\install\include`"",
+    "-DLIBXC_INCLUDE_DIR_F03=`"$($QeSourceDir)\..\libxc\install\include`"",
+    "-DLIBXC_LIBRARIES=`"$($QeSourceDir)\..\libxc\install\lib\xc.lib`"",
+    "-DLIBXC_LIBRARIES_F03=`"$($QeSourceDir)\..\libxc\install\lib\xcf03.lib`"",
+
     "-DQE_ENABLE_ELPA=OFF",            # Disable ELPA for initial build
     "-DQE_ENABLE_TEST=OFF",            # Disable tests for initial build
     "-DQE_WANNIER90_INTERNAL=ON",      # Use internal Wannier90 (submodule exists)

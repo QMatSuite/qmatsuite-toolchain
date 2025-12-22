@@ -241,7 +241,7 @@ jobs:
 
       - name: Install build tools (cmake, ninja)
         run: |
-          choco install --no-progress -y cmake ninja
+          choco install --no-progress -y cmake ninja pkgconfiglite
 
       - name: Clean build directory (if clean_compile requested)
         if: inputs.clean_compile == true
@@ -271,7 +271,9 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" `
-            -MakeTarget "$env:BUILD_MODE"
+            -MakeTarget "$env:BUILD_MODE" `
+            -WithLibxc:$true
+      
 
       - name: Stage QE executables and runtime DLLs
         run: |
