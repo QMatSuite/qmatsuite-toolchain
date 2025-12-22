@@ -258,7 +258,7 @@ jobs:
       - name: Refresh QE source (no patch)
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
-            -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1" -NoPatch
+            -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1"
       - name: Refresh and build libxc
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `

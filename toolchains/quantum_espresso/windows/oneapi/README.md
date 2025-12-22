@@ -287,7 +287,7 @@ Order matters: refresh (clone) → apply patches → build → stage.
 
 ### Step 1: Refresh (clone QE from git)
 ```powershell
-.\scripts\refresh_qe_source.ps1 -NoPatch
+.\scripts\refresh_qe_source.ps1
 ```
 Notes:
 - Cleans prior QE sources/build artifacts, preserves repo files.
@@ -388,7 +388,7 @@ The patching script (`apply_qe_patches.ps1`) copies `patches/devxlib-timer.c` di
 ```powershell
 .\scripts\refresh_qe_source.ps1
 ```
-The refresh script applies patches automatically (opt-out with `-NoPatch`).
+The refresh script DOES NOT apply patches automatically.
 
 **Manual apply (if you clone QE yourself):**
 ```powershell
@@ -402,7 +402,7 @@ The patch script is **idempotent**: it skips patches already applied and stops i
 ### Workflow Reminder
 
 The typical workflow is:
-1. **Clone QE source:** `scripts\refresh_qe_source.ps1` only cleans and clones QE (use `-NoPatch` to skip patching)
+1. **Clone QE source:** `scripts\refresh_qe_source.ps1` only cleans and clones QE.
 2. **Apply patches:** Run `scripts\apply_qe_patches.ps1` to apply the Windows patches above
 3. **Build:** Use `scripts\build_qe_win_oneapi.ps1` (add `-NoMpi` for serial builds)
 
@@ -1066,7 +1066,6 @@ Refreshes QE source by cleaning old sources and cloning fresh from git.
 **Parameters:**
 - `-DryRun` - Show what would be deleted without actually doing it
 - `-QeVersion <tag>` - Clone specific version (e.g., "qe-7.5"). Default: newest release
-- `-NoPatch` - Skip automatic patch application
 
 **What it preserves:**
 - `scripts/` directory
