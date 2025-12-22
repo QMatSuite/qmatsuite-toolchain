@@ -251,8 +251,8 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\apply_qe_patches.ps1" `
-            -QeDir "$env:QE_SRC" `
-            -PatchDir "$env:QE_ROOT\patches"
+            -QeDir "upstream\qe" `
+            -PatchDir "patches"
 
       - name: Clean build directory (if requested)
         if: inputs.clean_build == true
