@@ -19,7 +19,8 @@ param(
     [string]$FftwVendor = "Intel_DFTI",  # FFT backend vendor (default: Intel_DFTI)
     [ValidateSet('pw', 'all')]
     [string]$MakeTarget = "pw",  # Build target: 'pw' (pw only, default) or 'all' (all executables)
-    [switch]$WithLibxc = $false          # If specified, build with LibXC
+    [switch]$WithLibxc = $false,          # If specified, build with LibXC
+    [switch]$saveBuildLog = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -947,15 +948,21 @@ set_target_properties(VendorFFTW PROPERTIES OUTPUT_NAME "VendorFFTW")
     Write-Host "=== CMake Build (verbose) ===" -ForegroundColor Yellow
     
     # Capture full stdout+stderr to log file
-    $buildLogFile = Join-Path $BuildDir "build.log"
-    Write-Host "  Build output is being redirected to: $buildLogFile" -ForegroundColor Cyan
-    Write-Host "  Check build.log for full build output" -ForegroundColor Cyan
-    Write-Host ""
+    if ($saveBuildLog) {
+        $buildLogFile = Join-Path $BuildDir "build.log"
+        Write-Host "  Build output is being redirected to: $buildLogFile" -ForegroundColor Cyan
+        Write-Host "  Check build.log for full build output" -ForegroundColor Cyan
+        Write-Host ""
+
+        # Use Start-Process with redirection to capture output to log file
+        # This is more reliable than ProcessStartInfo with event handlers
+        # Wrap the entire command in parentheses and redirect
+        $buildCmdWithRedirect = "($buildCmd) > `"$buildLogFile`" 2>&1"
+    } else {
+        $buildCmdWithRedirect = "($buildCmd)"
+    }
     
-    # Use Start-Process with redirection to capture output to log file
-    # This is more reliable than ProcessStartInfo with event handlers
-    # Wrap the entire command in parentheses and redirect
-    $buildCmdWithRedirect = "($buildCmd) > `"$buildLogFile`" 2>&1"
+    
     
     try {
         $proc = Start-Process -FilePath "cmd.exe" -ArgumentList "/c $buildCmdWithRedirect" -NoNewWindow -Wait -PassThru
@@ -964,11 +971,13 @@ set_target_properties(VendorFFTW PROPERTIES OUTPUT_NAME "VendorFFTW")
     } catch {
         Write-Host "  ERROR: Failed to execute build command: $_" -ForegroundColor Red
         $exitCode = 1
-        # Ensure log file exists even on error
-        if (-not (Test-Path $buildLogFile)) {
-            "Build command failed: $_" | Out-File -FilePath $buildLogFile -Encoding UTF8
+        if ($saveBuildLog){
+            # Ensure log file exists even on error
+            if (-not (Test-Path $buildLogFile)) {
+                "Build command failed: $_" | Out-File -FilePath $buildLogFile -Encoding UTF8
+            }
+            throw
         }
-        throw
     }
     
     # Check if build succeeded
@@ -976,55 +985,61 @@ set_target_properties(VendorFFTW PROPERTIES OUTPUT_NAME "VendorFFTW")
         Write-Host ""
         Write-Host "ERROR: Build failed with exit code $exitCode" -ForegroundColor Red
         Write-Host ""
-        Write-Host "=== Extracting error context from build log ===" -ForegroundColor Yellow
-        
-        if (Test-Path $buildLogFile) {
-            # Find first occurrence of "FAILED:" or "error:" with context (+-30 lines)
-            $failedMatch = Select-String -Path $buildLogFile -Pattern "FAILED:" -Context 30,30 | Select-Object -First 1
-            $errorMatch = Select-String -Path $buildLogFile -Pattern "error:" -Context 30,30 -CaseSensitive:$false | Select-Object -First 1
+        if ($saveBuildLog){
+            Write-Host "=== Extracting error context from build log ===" -ForegroundColor Yellow
             
-            if ($failedMatch) {
+            if (Test-Path $buildLogFile) {
+                # Find first occurrence of "FAILED:" or "error:" with context (+-30 lines)
+                $failedMatch = Select-String -Path $buildLogFile -Pattern "FAILED:" -Context 30,30 | Select-Object -First 1
+                $errorMatch = Select-String -Path $buildLogFile -Pattern "error:" -Context 30,30 -CaseSensitive:$false | Select-Object -First 1
+                
+                if ($failedMatch) {
+                    Write-Host ""
+                    Write-Host "First FAILED: occurrence (with context):" -ForegroundColor Cyan
+                    Write-Host "---" -ForegroundColor Gray
+                    $failedMatch.Context.PreContext | ForEach-Object { Write-Host $_ }
+                    Write-Host $failedMatch.Line -ForegroundColor Red
+                    $failedMatch.Context.PostContext | ForEach-Object { Write-Host $_ }
+                    Write-Host "---" -ForegroundColor Gray
+                } elseif ($errorMatch) {
+                    Write-Host ""
+                    Write-Host "First error: occurrence (with context):" -ForegroundColor Cyan
+                    Write-Host "---" -ForegroundColor Gray
+                    $errorMatch.Context.PreContext | ForEach-Object { Write-Host $_ }
+                    Write-Host $errorMatch.Line -ForegroundColor Red
+                    $errorMatch.Context.PostContext | ForEach-Object { Write-Host $_ }
+                    Write-Host "---" -ForegroundColor Gray
+                } else {
+                    Write-Host "  No 'FAILED:' or 'error:' patterns found in log" -ForegroundColor Yellow
+                    Write-Host "  Showing last 60 lines of build log:" -ForegroundColor Yellow
+                    Write-Host "---" -ForegroundColor Gray
+                    Get-Content $buildLogFile -Tail 60 | ForEach-Object { Write-Host $_ }
+                    Write-Host "---" -ForegroundColor Gray
+                }
                 Write-Host ""
-                Write-Host "First FAILED: occurrence (with context):" -ForegroundColor Cyan
-                Write-Host "---" -ForegroundColor Gray
-                $failedMatch.Context.PreContext | ForEach-Object { Write-Host $_ }
-                Write-Host $failedMatch.Line -ForegroundColor Red
-                $failedMatch.Context.PostContext | ForEach-Object { Write-Host $_ }
-                Write-Host "---" -ForegroundColor Gray
-            } elseif ($errorMatch) {
-                Write-Host ""
-                Write-Host "First error: occurrence (with context):" -ForegroundColor Cyan
-                Write-Host "---" -ForegroundColor Gray
-                $errorMatch.Context.PreContext | ForEach-Object { Write-Host $_ }
-                Write-Host $errorMatch.Line -ForegroundColor Red
-                $errorMatch.Context.PostContext | ForEach-Object { Write-Host $_ }
-                Write-Host "---" -ForegroundColor Gray
+                Write-Host "Full build log available at: $buildLogFile" -ForegroundColor Cyan
             } else {
-                Write-Host "  No 'FAILED:' or 'error:' patterns found in log" -ForegroundColor Yellow
-                Write-Host "  Showing last 60 lines of build log:" -ForegroundColor Yellow
-                Write-Host "---" -ForegroundColor Gray
-                Get-Content $buildLogFile -Tail 60 | ForEach-Object { Write-Host $_ }
-                Write-Host "---" -ForegroundColor Gray
+                Write-Host "  WARNING: Build log file not found at $buildLogFile" -ForegroundColor Yellow
             }
-            Write-Host ""
-            Write-Host "Full build log available at: $buildLogFile" -ForegroundColor Cyan
-        } else {
-            Write-Host "  WARNING: Build log file not found at $buildLogFile" -ForegroundColor Yellow
         }
-        
         Write-Host ""
         exit $exitCode
     } else {
         # Build succeeded - show last 60 lines
         Write-Host ""
-        Write-Host "Build completed successfully. Showing last 60 lines:" -ForegroundColor Green
-        Write-Host "---" -ForegroundColor Gray
-        if (Test-Path $buildLogFile) {
-            Get-Content $buildLogFile -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        if ($saveBuildLog){
+            Write-Host "Build completed successfully. Showing last 60 lines:" -ForegroundColor Green
+            Write-Host "---" -ForegroundColor Gray
+            if (Test-Path $buildLogFile) {
+                Get-Content $buildLogFile -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            }
+            Write-Host "---" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "Full build log available at: $buildLogFile" -ForegroundColor Cyan
         }
-        Write-Host "---" -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "Full build log available at: $buildLogFile" -ForegroundColor Cyan
+        else {
+            Write-Host "Build completed successfully." -ForegroundColor Green
+        }
     }
 } finally {
     # Restore error action preference
