@@ -540,11 +540,11 @@ $cmakeConfigure = @(
     "-DQE_ENABLE_SCALAPACK=OFF",       # Disable SCALAPACK for initial build
     "-DQE_ENABLE_HDF5=OFF",            # Disable HDF5 for initial build
     "-DQE_ENABLE_LIBXC=$libxcOnOff",            # Enable LibXC for production
-    "-DLibxc_DIR=`"$($QeSourceDir)\..\libxc\install\lib\cmake\Libxc`"",
-    "-DLIBXC_INCLUDE_DIR=`"$($QeSourceDir)\..\libxc\install\include`"",
-    "-DLIBXC_INCLUDE_DIR_F03=`"$($QeSourceDir)\..\libxc\install\include`"",
-    "-DLIBXC_LIBRARIES=`"$($QeSourceDir)\..\libxc\install\lib\xc.lib`"",
-    "-DLIBXC_LIBRARIES_F03=`"$($QeSourceDir)\..\libxc\install\lib\xcf03.lib`"",
+    "-DLibxc_DIR=`"$($RepoRoot)\upstream\libxc\install\lib\cmake\Libxc`"",
+    "-DLIBXC_INCLUDE_DIR=`"$($RepoRoot)\upstream\libxc\install\include`"",
+    "-DLIBXC_INCLUDE_DIR_F03=`"$($RepoRoot)\upstream\libxc\install\include`"",
+    "-DLIBXC_LIBRARIES=`"$($RepoRoot)\upstream\libxc\install\lib\xc.lib`"",
+    "-DLIBXC_LIBRARIES_F03=`"$($RepoRoot)\upstream\libxc\install\lib\xcf03.lib`"",
 
     "-DQE_ENABLE_ELPA=OFF",            # Disable ELPA for initial build
     "-DQE_ENABLE_TEST=OFF",            # Disable tests for initial build

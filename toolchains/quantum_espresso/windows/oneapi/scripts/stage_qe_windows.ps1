@@ -2077,6 +2077,50 @@ if ($libxcEnabled -eq "ON") {
     New-Item -ItemType Directory -Force -Path $DistBinDir | Out-Null
 
     Copy-Item -Force -Path (Join-Path $libxcBin "*") -Destination $DistBinDir
+
+
+    # Also stage libxc license (prefer COPYING, fallback to LICENSE*)
+    $libxcLicenseCandidates = @(
+        (Join-Path $RepoRoot "upstream\libxc\src\COPYING"),
+        (Join-Path $RepoRoot "upstream\libxc\src\COPYING.txt"),
+        (Join-Path $RepoRoot "upstream\libxc\src\LICENSE"),
+        (Join-Path $RepoRoot "upstream\libxc\src\LICENSE.txt"),
+        (Join-Path $RepoRoot "upstream\libxc\src\LICENSE.md"),
+        (Join-Path $RepoRoot "upstream\libxc\src\LICENCE"),       # UK spelling (rare)
+        (Join-Path $RepoRoot "upstream\libxc\src\LICENCE.txt")
+    )
+
+    $libxcLicenseSrc = $null
+    foreach ($p in $libxcLicenseCandidates) {
+        if (Test-Path $p) { $libxcLicenseSrc = $p; break }
+    }
+
+    # If not found at repo root, try anywhere under upstream/libxc/src as a last resort
+    if (-not $libxcLicenseSrc) {
+        $srcRoot = Join-Path $RepoRoot "upstream\libxc\src"
+        if (Test-Path $srcRoot) {
+            $hit = Get-ChildItem $srcRoot -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^(COPYING|LICENSE|LICENCE)(\..*)?$' } |
+                Select-Object -First 1
+            if ($hit) { $libxcLicenseSrc = $hit.FullName }
+        }
+    }
+
+    if ($libxcLicenseSrc) {
+        $libxcLicenseDstDir = Join-Path $distRoot "licenses\quantum-espresso\external\libxc"
+        New-Item -ItemType Directory -Force -Path $libxcLicenseDstDir | Out-Null
+
+        # Keep original filename to avoid ambiguity
+        $dstName = Split-Path -Leaf $libxcLicenseSrc
+        Copy-Item -Force -Path $libxcLicenseSrc -Destination (Join-Path $libxcLicenseDstDir $dstName)
+
+        Write-Host "Staged libxc license: $dstName" -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: QE_ENABLE_LIBXC=ON but no libxc license file found under upstream\libxc\src (COPYING/LICENSE/LICENCE). Skipping." -ForegroundColor Yellow
+        # If you prefer hard fail instead of warning, replace the line above with:
+        # throw "QE_ENABLE_LIBXC=ON but no libxc license found under upstream\libxc\src"
+    }
+
 }
 elseif ($libxcEnabled -eq "OFF") {
     Write-Host "libxc off (QE_ENABLE_LIBXC=OFF) -> skip libxc staging" -ForegroundColor DarkGray
