@@ -3,6 +3,7 @@ $foldername = "win-oneapi_2_serial_MKLFFT"
 $foldername = "win-oneapi_5_MSMPI_OMP_O2_MKLFFT"
 $foldername = "win-oneapi_4_OMP_O2_MKLFFT"
 $foldername = "win-oneapi_6_MSMPI_OMP_O2_MKLFFT"
+$foldername = "qe-windows-oneapi-msmpi-all-0831c2d3dbe94cc01c22f976e009e4bac3ebd064\bin"
 
 $env:KMP_SETTINGS = "1"
 $env:OMP_DISPLAY_ENV = "TRUE"

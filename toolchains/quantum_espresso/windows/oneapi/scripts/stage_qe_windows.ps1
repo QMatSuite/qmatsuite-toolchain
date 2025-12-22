@@ -134,6 +134,25 @@ function Get-SearchRoots {
     return ($roots | Select-Object -Unique)
 }
 
+function Get-LibxcDependentExecutables {
+    param(
+        [string]$DumpbinExe,
+        [string[]]$ExePaths
+    )
+
+    $hits = @()
+
+    foreach ($exe in $ExePaths) {
+        if (-not (Test-Path $exe)) { continue }
+
+        $out = & $DumpbinExe /DEPENDENTS $exe 2>$null | Out-String
+        if ($out -match '(?i)\bxc\.dll\b' -or $out -match '(?i)\bxcf03\.dll\b') {
+            $hits += $exe
+        }
+    }
+
+    return $hits
+}
 function Get-ExeDependentsDumpbin {
     param(
         [string]$Path,
@@ -505,6 +524,37 @@ function Copy-DllClosure {
     Write-Host "Starting recursive dependency closure (max ${MAX_SECONDS}s wall-clock timeout, ${DUMPBIN_TIMEOUT_MS}ms per dumpbin)..."
     Write-Host "  Initial executables to scan: $($ExePaths.Count)"
     Write-Host "  Approved search roots: $($approvedRoots.Count) locations"
+
+    # ---- LIBXC detection (print only) ----
+    $cmakeCache = Join-Path $BuildDir "CMakeCache.txt"
+    $libxcEnabled = $false
+
+    if (Test-Path $cmakeCache) {
+        $line = Select-String -Path $cmakeCache -Pattern '^QE_ENABLE_LIBXC:BOOL=' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($line -and $line.Line -match 'QE_ENABLE_LIBXC:BOOL=ON') {
+            $libxcEnabled = $true
+        }
+    }
+
+    if ($libxcEnabled) {
+        Write-Host ""
+        Write-Host "[libxc] QE_ENABLE_LIBXC=ON detected" -ForegroundColor Cyan
+
+        $libxcExes = Get-LibxcDependentExecutables `
+            -DumpbinExe $DumpbinPath `
+            -ExePaths  $ExePaths
+        $libxcExes = $libxcExes | Sort-Object -Unique
+        
+        Write-Host "[libxc] Executables linked against xc.dll / xcf03.dll:" -ForegroundColor Cyan
+        foreach ($exe in $libxcExes) {
+            Write-Host ("[libxc]  " + (Split-Path $exe -Leaf)) -ForegroundColor Yellow
+        }
+
+        Write-Host "[libxc] Total: $($libxcExes.Count)" -ForegroundColor Cyan
+        Write-Host ""
+    }
+
+    # ---- end LIBXC detection ----
 
     # Initialize BFS by enqueueing all staged exes
     $enqueuedCount = 0
@@ -900,6 +950,7 @@ function Stage-MSMPIRuntime {
     
     Write-Host "MS-MPI runtime staging complete." -ForegroundColor Green
 }
+
 
 function Run-SmokeTest {
     param(

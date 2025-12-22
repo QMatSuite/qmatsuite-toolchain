@@ -1,0 +1,59 @@
+diff --git a/Modules/sockets.c b/Modules/sockets.c
+index 50deffa26..03b92d355 100644
+--- a/Modules/sockets.c
++++ b/Modules/sockets.c
+@@ -36,7 +36,20 @@ Functions:
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+-#if !defined(__WIN32)
++
++#if defined(_WIN32) || defined(__WIN32__)
++#include <winsock2.h>
++#include <ws2tcpip.h>
++#pragma comment(lib, "ws2_32.lib")
++
++/* Minimal stubs for Windows build; real Unix socket code is below */
++void open_socket(int *psockfd, int* inet, int* port, const char* host) { (void)psockfd; (void)inet; (void)port; (void)host; fprintf(stderr,"sockets not implemented on Windows build\n"); exit(1); }
++void writebuffer(int *psockfd, const char *data, int* plen) { (void)psockfd; (void)data; (void)plen; fprintf(stderr,"sockets not implemented on Windows build\n"); exit(1); }
++void readbuffer(int *psockfd, char *data, int* plen) { (void)psockfd; (void)data; (void)plen; fprintf(stderr,"sockets not implemented on Windows build\n"); exit(1); }
++void close_socket(int *psockfd) { (void)psockfd; /* nothing */ }
++
++#else
++
+ #include <unistd.h>
+ #include <string.h>
+ #include <sys/types.h>
+@@ -152,12 +165,4 @@ Args:
+ 
+    if (n == 0) { perror("Error reading from socket: server has quit or connection broke"); exit(-1); }
+ }
+-#else
+-
+-void open_socket(int *psockfd, int* inet, int* port, const char* host){;}
+-void readbuffer(int *psockfd, char *data, int* plen){;}
+-void writebuffer(int *psockfd, const char *data, int* plen){;}
+-
+ #endif
+-
+-
+diff --git a/XClib/beefun.c b/XClib/beefun.c
+index 9c943fa4d..8ebb65102 100755
+--- a/XClib/beefun.c
++++ b/XClib/beefun.c
+@@ -1,10 +1,15 @@
+ #define _XOPEN_SOURCE 500
+ 
++#include <math.h>
+ #include <math.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
++#ifndef M_PI
++#define M_PI 3.14159265358979323846
++#endif
++
+ #include "beefleg.h"
+ 
+ #include "pbecor.h"
