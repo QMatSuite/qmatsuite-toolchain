@@ -3,57 +3,61 @@ $foldername = "win-oneapi_2_serial_MKLFFT"
 $foldername = "win-oneapi_5_MSMPI_OMP_O2_MKLFFT"
 $foldername = "win-oneapi_4_OMP_O2_MKLFFT"
 $foldername = "win-oneapi_6_MSMPI_OMP_O2_MKLFFT"
-$foldername = "qe-windows-oneapi-msmpi-all-0831c2d3dbe94cc01c22f976e009e4bac3ebd064\bin"
+$foldername = "qe6.4.1_win\qe"
+$foldername = "qe-7.5-win-oneapi-msmpi\bin"
+$foldername = "qe-7.5-win-oneapi-msmpi-libxc\bin"
 
 $env:KMP_SETTINGS = "1"
 $env:OMP_DISPLAY_ENV = "TRUE"
 
+cd toolchains\quantum_espresso\tests\benchmark
 $distDir = "..\..\windows\oneapi\dist\$foldername"
 $env:PATH = "$distDir;$env:PATH"
 
 pw.exe -in si100.in > "si100_$foldername.out" 2>&1
 
 mpiexec.exe -n 4 pw.exe -in si100.in > "si100_$foldername.out" 2>&1
-
 mpiexec.exe -n 4 pw.exe -in si100.in > si100_qe6.4.1_MSMPI.out 2>&1
 
 $env:OMP_NUM_THREADS = "1"
 $env:MKL_NUM_THREADS = "8"
 
+# go to pw_libxc to test libxc enabled release
 
-$root = "C:\Users\hnhua\Downloads\qe-7.5-win-oneapi-msmpi"
+# test release
+$distDir = "qmatsuite-toolchain\toolchains\quantum_espresso\windows\oneapi\dist"
+cd $distDir
+Get-FileHash .\qe-7.5-win-oneapi-msmpi.zip -Algorithm SHA256
+Get-FileHash .\qe-7.5-win-oneapi-msmpi-libxc.zip -Algorithm SHA256
 
-$files = Get-ChildItem -Path $root -Recurse -File -Include *.exe,*.dll -ErrorAction SilentlyContinue
+gh --version
+gh attestation verify .\qe-7.5-win-oneapi-msmpi.zip --repo QMatSuite/qmatsuite-toolchain
+gh attestation verify .\qe-7.5-win-oneapi-msmpi-libxc.zip --repo QMatSuite/qmatsuite-toolchain
 
-$results = $files | ForEach-Object {
-  $sig = Get-AuthenticodeSignature -FilePath $_.FullName
+# check signature
+$root = ".\qe-7.5-win-oneapi-msmpi\bin"
+$root = ".\qe-7.5-win-oneapi-msmpi-libxc\bin"
+
+$targets = Get-ChildItem -Path $root -Recurse -File -Include *.exe,*.dll
+$report = foreach ($f in $targets) {
+  $sig = Get-AuthenticodeSignature $f.FullName
   [pscustomobject]@{
-    Path   = $_.FullName
+    File = $f.FullName
     Status = $sig.Status
-    Signed = ($sig.Status -eq 'Valid')
     Signer = $sig.SignerCertificate.Subject
+    Thumbprint = $sig.SignerCertificate.Thumbprint
+    Timestamp = $sig.TimeStamperCertificate.Subject
   }
 }
 
-# 列出所有“不是 Valid”的（包括未签名/无效/未知等）
-$bad = $results | Where-Object { $_.Status -ne 'Valid' }
-
-$bad | Sort-Object Status, Path | Format-Table -AutoSize
-
-if ($bad.Count -eq 0) {
-  Write-Host "✅ All EXE/DLL are signed and VALID." -ForegroundColor Green
-} else {
-  Write-Host "❌ Found $($bad.Count) file(s) not validly signed." -ForegroundColor Red
-  # 可选：导出报告
-  $results | Export-Csv "$root\sign-report.csv" -NoTypeInformation -Encoding UTF8
-  Write-Host "Report saved to: $root\sign-report.csv"
-}
+$report | Group-Object Status | Sort-Object Count -Descending | Format-Table -AutoSize
+$report | Where-Object Status -ne 'Valid' | Sort-Object File | Format-Table -AutoSize
 
 
 # Alternative
 # choco install sysinternals -y
-C:\ProgramData\chocolatey\lib\sysinternals\tools\sigcheck64.exe -c -s "C:\Users\$(whoami)\qmatsuite-toolchain\toolchains\quantum_espresso\windows\oneapi\dist\win-oneapi" > sigcheck.csv
-C:\ProgramData\chocolatey\lib\sysinternals\tools\sigcheck64.exe -q -m -i -s "C:\Users\$(whoami)\qmatsuite-toolchain\toolchains\quantum_espresso\windows\oneapi\dist\win-oneapi\bin" 
+C:\ProgramData\chocolatey\lib\sysinternals\tools\sigcheck64.exe -c -s $root > sigcheck.csv
+C:\ProgramData\chocolatey\lib\sysinternals\tools\sigcheck64.exe -q -m -i -s $root
 Import-Csv sigcheck.csv |
   Where-Object { $_.Verified -ne "Signed" } |
   ForEach-Object {

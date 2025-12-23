@@ -1,5 +1,7 @@
  &control
     calculation='scf',
+    pseudo_dir = '.'
+    outdir = './outdir'
  /
  &system
    ibrav=1,
