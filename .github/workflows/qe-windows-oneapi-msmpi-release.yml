@@ -357,8 +357,8 @@ jobs:
           trusted-signing-account-name: ${{ vars.TRUSTEDSIGN_ACCOUNT }}
           certificate-profile-name: ${{ vars.TRUSTEDSIGN_CERT_PROFILE }}
           files: |
-            dist/win-oneapi-msmpi/bin/xc.dll
-            dist/win-oneapi-msmpi/bin/xcf03.dll
+            ${{ github.workspace }}/dist/win-oneapi-msmpi/bin/xc.dll
+            ${{ github.workspace }}/dist/win-oneapi-msmpi/bin/xcf03.dll
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256

@@ -1389,7 +1389,8 @@ function Copy-QeLicenses {
 function Copy-OneApiLicenses {
     param(
         [string]$OneApiRoot,
-        [string]$LicensesDir
+        [string]$LicensesDir,
+        [string]$RepoRootPath
     )
     $oneApiLicenseDir = Join-Path $LicensesDir "intel-oneapi"
     if (-not (Test-Path $oneApiLicenseDir)) {
@@ -1453,7 +1454,18 @@ function Copy-OneApiLicenses {
             }
         }
     }
-    
+    if ($copied.Count -eq 0) {
+        $LicenseFallbackDir = Join-Path $RepoRootPath "license_fallbacks\intel-oneapi"
+        if (Test-Path $LicenseFallbackDir) {
+            $licenseFiles = Get-ChildItem -Path $LicenseFallbackDir -Filter "license.htm" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($licenseFiles) {
+                $dst = Join-Path $oneApiLicenseDir "license.htm"
+                Copy-Item -Force $licenseFiles.FullName $dst
+                $copied += "license.htm"
+                Write-Host "  Copied oneAPI license: license.htm (from repo fallback)" -ForegroundColor Yellow
+            }
+        }
+    }
     if ($copied.Count -eq 0) {
         Write-Warning "No Intel oneAPI license file (license.htm) found under $OneApiRoot\licensing"
     }
@@ -2401,7 +2413,7 @@ $msmpiVersion = Get-MsmpiVersion -DistBinDir $DistBinDir
 
 # Copy license files
 $qeLicenseResult = Copy-QeLicenses -QeSourceDir $qeSourceDir -LicensesDir $licensesDir
-$oneApiLicenseResult = Copy-OneApiLicenses -OneApiRoot $oneApiRoot -LicensesDir $licensesDir
+$oneApiLicenseResult = Copy-OneApiLicenses -OneApiRoot $oneApiRoot -LicensesDir $licensesDir -RepoRootPath $RepoRootPath
 $msmpiLicenseResult = Copy-MsmpiLicense -LicensesDir $licensesDir
 
 # Generate THIRD_PARTY_NOTICES.txt

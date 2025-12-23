@@ -1,0 +1,34 @@
+﻿QMatSuite Toolchain - Quantum ESPRESSO Windows (oneAPI + MS-MPI) Binary Distribution
+
+Build date (UTC): 2025-12-23 05:11:52 UTC
+
+This package redistributes precompiled binaries of Quantum ESPRESSO and bundles
+third-party runtime components needed to run on Windows without requiring a
+separate oneAPI/MS-MPI installation. Each component remains licensed under its
+own license terms. See the subfolders in this directory for the full license
+texts.
+
+Included components
+
+1) Quantum ESPRESSO (qe-7.5)
+   Copyright: Quantum ESPRESSO Foundation and contributors
+   License: GNU General Public License v2 or later (GPL-2.0-or-later)
+   License text: licenses/quantum-espresso/
+
+2) Intel oneAPI Runtime Libraries (2025.3)
+   Examples: Intel OpenMP (libiomp5md), Intel MKL (mkl_rt), compiler runtimes
+   License: Intel terms for redistributable runtime components
+   License text: licenses/intel-oneapi/
+
+3) Microsoft MPI (MS-MPI) Runtime (10.1.12498.52)
+   License: Microsoft Software License Terms
+   License text: licenses/microsoft-msmpi/
+
+Notes
+
+- Windows system components (e.g., api-ms-win-* and other OS-provided DLLs) are not
+  bundled.
+
+- If any license text could not be found during staging, the build log will
+  include a prominent warning. Please refer to the vendor documentation for the
+  corresponding version.
