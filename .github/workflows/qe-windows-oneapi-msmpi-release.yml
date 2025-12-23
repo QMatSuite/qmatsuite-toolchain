@@ -19,6 +19,11 @@ on:
         options:
           - pw
           - all
+      with_libxc:
+        description: 'Build with libxc or not'
+        required: false
+        default: false
+        type: boolean
       clean_compile:
         description: 'Force clean compile (skip cache, delete build directories)'
         required: false
@@ -32,7 +37,7 @@ on:
       release_draft:
         description: 'Create as draft release'
         required: false
-        default: true
+        default: false
         type: boolean
 
 concurrency:
@@ -69,11 +74,11 @@ jobs:
         with:
           path: |
             toolchains/quantum_espresso/windows/oneapi/upstream/qe
-          key: qe-oneapi-msmpi-release-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}-${{ github.sha }}
+            toolchains/quantum_espresso/windows/oneapi/upstream/qe/build-win-oneapi-msmpi
+          key: qe-oneapi-msmpi-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}
           restore-keys: |
-            qe-oneapi-msmpi-release-${{ runner.os }}-${{ hashFiles('toolchains/quantum_espresso/windows/oneapi/patches/**', 'toolchains/quantum_espresso/windows/oneapi/scripts/build_qe_win_oneapi.ps1', 'toolchains/quantum_espresso/windows/oneapi/scripts/stage_qe_windows.ps1') }}-
-            qe-oneapi-msmpi-release-${{ runner.os }}-
-
+            qe-oneapi-msmpi-${{ runner.os }}-
+        
       - name: Cache oneAPI installation
         id: cache-oneapi-install
         uses: actions/cache@v4
@@ -259,7 +264,8 @@ jobs:
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\refresh_qe_source.ps1"
-      - name: Refresh and build libxc
+      - name: Refresh and build libxc (if with_libxc requested)
+        if: inputs.with_libxc == true
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_libxc_windows_oneapi.ps1"
@@ -270,7 +276,15 @@ jobs:
             -QeDir "upstream\qe" `
             -PatchDir "patches"
 
-      - name: Build QE (oneAPI, MS-MPI enabled)
+      - name: Build QE (oneAPI, MS-MPI enabled) [no libxc]
+        if: inputs.with_libxc != true
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" `
+            -MakeTarget "$env:BUILD_MODE"
+
+      - name: Build QE (oneAPI, MS-MPI enabled) [with libxc]
+        if: inputs.with_libxc == true
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass `
             -File "$env:QE_ROOT\scripts\build_qe_win_oneapi.ps1" `
@@ -319,6 +333,35 @@ jobs:
           "ENDPOINT = '${{ vars.TRUSTEDSIGN_ENDPOINT }}'"
           "ACCOUNT  = '${{ vars.TRUSTEDSIGN_ACCOUNT }}'"
           "PROFILE  = '${{ vars.TRUSTEDSIGN_CERT_PROFILE }}'"
+      
+      - name: Detect libxc DLLs
+        if: inputs.with_libxc == true
+        id: detect_libxc
+        shell: pwsh
+        run: |
+          $a = "dist/win-oneapi-msmpi/bin/xc.dll"
+          $b = "dist/win-oneapi-msmpi/bin/xcf03.dll"
+          if ((Test-Path $a) -and (Test-Path $b)) {
+            "found=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            Write-Host "libxc DLLs found."
+          } else {
+            "found=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            throw "Error: libxc DLLs not found, although with_libxc is requested."
+          }
+      
+      - name: Sign libxc DLLs only (xc.dll, xcf03.dll)
+        if: inputs.with_libxc == true
+        uses: Azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.TRUSTEDSIGN_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTEDSIGN_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTEDSIGN_CERT_PROFILE }}
+          files: |
+            dist/win-oneapi-msmpi/bin/xc.dll
+            dist/win-oneapi-msmpi/bin/xcf03.dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
         
       - name: Sign all executables with Trusted Signing
         uses: Azure/trusted-signing-action@v0
@@ -333,35 +376,42 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
           continue-on-error: false
-
+        
       - name: Create distribution zip
+        shell: pwsh
         run: |
           $distDir = "dist/win-oneapi-msmpi"
-          $zipName = "qe-windows-oneapi-msmpi-${{ inputs.build_mode }}-${{ github.sha }}.zip"
+          $qeVersion = "7.5"
+      
+          if (${{ inputs.with_libxc }} == true) {
+            $zipName = "qe-$qeVersion-win-oneapi-msmpi-libxc.zip"
+            Write-Host "libxc detected → using libxc zip name"
+          } else {
+            $zipName = "qe-$qeVersion-win-oneapi-msmpi.zip"
+            Write-Host "libxc not detected → using standard zip name"
+          }
+      
           $zipPath = Join-Path $env:RUNNER_TEMP $zipName
-          
+      
           Write-Host "Creating zip archive: $zipPath"
           Write-Host "Source directory: $distDir"
-          
+      
           if (-not (Test-Path $distDir)) {
             Write-Error "Distribution directory not found: $distDir"
             exit 1
           }
-          
-          # Get all files in dist directory
-          $files = Get-ChildItem -Path $distDir -Recurse -File
-          Write-Host "Found $($files.Count) files to archive"
-          
-          # Create zip using .NET compression
+      
           Add-Type -AssemblyName System.IO.Compression.FileSystem
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+      
           [System.IO.Compression.ZipFile]::CreateFromDirectory($distDir, $zipPath)
-          
-          Write-Host "Zip archive created: $zipPath"
-          Write-Host "Archive size: $((Get-Item $zipPath).Length) bytes"
-          
-          # Set output for next steps
+      
+          Write-Host "Zip created: $zipPath"
+          Write-Host "Size: $((Get-Item $zipPath).Length) bytes"
+      
           "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ZIP_NAME=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
 
       - name: Generate SHA256 checksum
         run: |
@@ -388,42 +438,56 @@ jobs:
 
       - name: Determine release name
         id: release_name
+        shell: pwsh
         run: |
           $releaseTag = "${{ inputs.release_tag }}"
           if ([string]::IsNullOrWhiteSpace($releaseTag)) {
+            $qeVersion = "7.5"
             $date = Get-Date -Format "yyyyMMdd"
             $shortSha = "${{ github.sha }}".Substring(0, 7)
+      
             $buildMode = "${{ inputs.build_mode }}"
-            $releaseTag = "QE-7.5-win-oneapi-msmpi-$buildMode-$date-$shortSha"
+            $variant = "win-oneapi-msmpi"
+            if ($buildMode -and $buildMode -ne "all") {
+              $variant = "$variant-$buildMode"
+            }
+            if (${{ inputs.with_libxc }} == true){
+              $variant = "$variant-libxc"
+            }
+      
+            # Immutable snapshot tag
+            $releaseTag = "qe-$qeVersion-$variant-$date-$shortSha"
           }
-          Write-Host "Release name: $releaseTag"
-          "RELEASE_NAME=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "name=$releaseTag" >> $env:GITHUB_OUTPUT
+      
+          Write-Host "Release tag: $releaseTag"
+          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "tag=$releaseTag" >> $env:GITHUB_OUTPUT
+        
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release_name.outputs.name }}
-          name: ${{ env.RELEASE_NAME }}
+          tag_name: ${{ steps.release_name.outputs.tag }}
+          name: ${{ steps.release_name.outputs.tag }}
           draft: ${{ inputs.release_draft }}
           files: |
             ${{ env.ZIP_PATH }}
             ${{ env.CHECKSUM_FILE }}
           body: |
-            Quantum ESPRESSO 7.5 Windows oneAPI MS-MPI Build
-            
-            **Build Mode:** ${{ inputs.build_mode }}
-            **Commit:** ${{ github.sha }}
-            **Build Date:** ${{ github.event.head_commit.timestamp || github.run_started_at }}
-            
-            This release contains signed executables and required runtime DLLs for Windows oneAPI MS-MPI builds.
-            
-            **Files:**
-            - `${{ env.ZIP_NAME }}` - Distribution archive (signed executables + DLLs)
-            - `checksums.txt` - SHA256 checksum
-            
-            **Verification:**
-            - All executables are signed with Microsoft Trusted Signing
-            - Build provenance is attested via GitHub artifact attestation
-          token: ${{ secrets.GITHUB_TOKEN }}
+            Quantum ESPRESSO 7.5 — Windows (Intel oneAPI + MS-MPI)
+      
+            **Variant:** win-oneapi-msmpi${{ inputs.build_mode != 'all' && format(' ({0})', inputs.build_mode) || '' }}
+            **Source:** ${{ github.repository }} @ ${{ github.sha }}
+            **Build date:** ${{ github.run_started_at }}
+      
+            **Files**
+            - `${{ env.ZIP_NAME }}` (portable distribution)
+            - `checksums.txt` (SHA256)
+      
+            **Notes**
+            - Executables are signed with Microsoft Trusted Signing (where applicable).
+            - Build provenance is attested via GitHub artifact attestation.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
 

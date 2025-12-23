@@ -435,7 +435,8 @@ function Get-CMakeCacheBool {
     if (-not (Test-Path $CachePath)) { return $null }
     $m = Select-String -Path $CachePath -Pattern ("^\s*" + [regex]::Escape($Key) + ":BOOL=") -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $m) { return $null }
-    return (($m.Line -split "=", 2)[1]).Trim()
+    if ((($m.Line -split "=", 2)[1]).Trim() -eq "ON") {return $true}
+    return $false
 }
 
 function Detect-MPIFromBuild {
@@ -544,7 +545,7 @@ function Copy-DllClosure {
             -DumpbinExe $DumpbinPath `
             -ExePaths  $ExePaths
         $libxcExes = $libxcExes | Sort-Object -Unique
-        
+
         Write-Host "[libxc] Executables linked against xc.dll / xcf03.dll:" -ForegroundColor Cyan
         foreach ($exe in $libxcExes) {
             Write-Host ("[libxc]  " + (Split-Path $exe -Leaf)) -ForegroundColor Yellow
@@ -1560,28 +1561,71 @@ function Generate-Readme {
         [int]$DllCount,
         [bool]$HasMsmpiLauncher
     )
+
     $readmeFile = Join-Path $DistRoot "README.txt"
-    
+
     $distLayoutSummary = "Contains $ExeCount executable(s) in bin/ and $DllCount runtime DLL(s) in bin/."
+
+    # --- code snippets (single-quoted here-strings => NO variable expansion) ---
+    $pathHint = @'
+Optional: add bin/ to PATH for this terminal session only:
+
+  set "PATH=%CD%;%PATH%"               (CMD, when you are already inside bin\)
+  $env:PATH = "$PWD;$env:PATH"         (PowerShell, when you are already inside bin\)
+
+If you are NOT inside bin\ yet, use:
+
+  set "PATH=%CD%\bin;%PATH%"           (CMD)
+  $env:PATH = "$PWD\bin;$env:PATH"     (PowerShell)
+'@
+
+    $ompHint = @'
+Set OMP_NUM_THREADS to control OpenMP threading:
+
+  set OMP_NUM_THREADS=8                (CMD)
+  $env:OMP_NUM_THREADS=8               (PowerShell)
+'@
+
+    $mklHint = @'
+Set MKL_NUM_THREADS to control Intel MKL threading (recommended when using OpenMP):
+
+  set MKL_NUM_THREADS=8                (CMD)
+  $env:MKL_NUM_THREADS=8               (PowerShell)
+'@
+
     $msmpiHint = if ($HasMsmpiLauncher) {
-        "MS-MPI launcher (mpiexec/msmpiexec) is included in bin/."
+@'
+MS-MPI launcher is included (mpiexec/msmpiexec) in bin/.
+
+Tip:
+- If you run from inside bin\, mpiexec should be found automatically.
+- Otherwise, add bin/ to PATH for the current terminal session (see the PATH hint above).
+'@
     } else {
-        "MS-MPI launcher is not bundled; install MS-MPI to use mpiexec."
+@'
+MS-MPI launcher is NOT bundled.
+
+To run MPI jobs, install Microsoft MPI and ensure mpiexec is available in PATH.
+(You can still run serial/OpenMP calculations without MS-MPI.)
+'@
     }
-    
+
+    # --- main README content (double-quoted here-string => expands $variables we want) ---
     $content = @"
-Quantum ESPRESSO for Windows (oneAPI + MS-MPI) - Precompiled Binaries
+Quantum ESPRESSO for Windows (Intel oneAPI + MS-MPI) — Precompiled Binaries
 
 Build date (UTC): $BuildDateUtc
+Quantum ESPRESSO version/tag: $QeVersion
 
-Quantum ESPRESSO version: $QeVersion
+Why this exists (and why it matters)
 
-Overview
+Building Quantum ESPRESSO on Windows is significantly harder than on Linux/macOS:
+toolchains, Fortran runtime DLLs, MPI, and dependency closure can be painful even for experts.
 
-This folder contains a standalone Windows distribution of Quantum ESPRESSO built
-with Intel oneAPI compilers/libraries and MS-MPI. Executables and runtime DLLs
-are placed side-by-side under bin/ so that the programs can run without editing
-PATH or installing additional runtimes.
+This distribution is a "just run it" package:
+- All executables and required runtime DLLs are colocated in bin/
+- No extra compiler/runtime installation needed on a typical Windows machine
+- Signed executables (when built via CI release workflow) for safer downloading and sharing
 
 Contents
 
@@ -1590,45 +1634,72 @@ $distLayoutSummary
 Directory layout
 
 - bin/
-  Quantum ESPRESSO executables (*.exe) and all bundled runtime DLL dependencies.
+  Quantum ESPRESSO executables (*.exe), bundled runtime DLL dependencies, and (optionally) MS-MPI launcher.
 
 - licenses/
-  License texts for Quantum ESPRESSO and bundled third-party runtime components.
+  License texts for Quantum ESPRESSO and bundled third-party components.
   See licenses/THIRD_PARTY_NOTICES.txt for a summary.
 
 - VERSION.txt
-  Build metadata for traceability.
+  Build metadata for traceability (exact build flags, toolchain versions, etc.)
 
-How to run
+Quick start (serial)
 
-1) Open a terminal (PowerShell or CMD).
+1) Open PowerShell or CMD.
+2) cd into the bin\ folder:
+     cd .\bin
+3) Run an executable, e.g.:
+     .\pw.exe -i scf-cg.in > scf-cg.out
 
-2) cd into the folder containing this README.txt
-
-3) Run an executable from bin/, for example:
-
-     .\bin\pw.exe -h
+$pathHint
 
 MPI usage
 
 $msmpiHint
 
-If you have a working MPI environment, you can run, e.g.:
+Example (MPI): run from inside bin\:
 
-  mpiexec -n 4 .\bin\pw.exe -in input.in
+  mpiexec -n 4 .\pw.exe -i scf-cg.in > scf-cg.out
 
-Licensing
+OpenMP / threading
 
-Quantum ESPRESSO is licensed under GPL v2 or later. Additional bundled runtime
-libraries (Intel oneAPI, Microsoft MPI) are redistributed under their respective
-licenses. See the licenses/ directory.
+$ompHint
+
+$mklHint
+
+Tip: For hybrid MPI+OpenMP runs, avoid oversubscription.
+Example: on a 16-core CPU, try mpiexec -n 4 with OMP_NUM_THREADS=4 as a starting point. Tune the above parameters to find the best performance for your calculations.
+
+About QMatSuite (GUI)
+
+If you want a more user-friendly workflow (project setup, input generation, job management, result browsing),
+check out QMatSuite — a modern GUI that can drive Quantum ESPRESSO and other engines.
+
+- Project home / downloads: www.qmatsuite.com
+- Source code / releases: github.com/QMatSuite
+
+This repo/toolchain exists as the "high-performance, reproducible build backend" for QMatSuite,
+and as a reference compilation recipe for anyone exploring QE/Wannier/etc. on Windows.
+
+Licensing (important)
+
+- Quantum ESPRESSO is licensed under GPL v2 or later.
+- Bundled third-party runtime components (e.g., Intel oneAPI runtimes, Microsoft MPI, MSVC runtime DLLs)
+  are redistributed under their respective licenses.
+  See the licenses/ folder for the exact texts.
 
 Disclaimer
 
-These binaries are provided "as is" without warranty. Please report issues with
-details about your Windows version, CPU, and the exact command used.
+These binaries are provided "as is" without warranty.
+
+If you report an issue, please include:
+- Windows version
+- CPU model
+- Whether you used MPI and/or OpenMP (and the values of OMP_NUM_THREADS / MKL_NUM_THREADS)
+- The command line used (including mpiexec arguments)
+- The contents of VERSION.txt
 "@
-    
+
     $content | Out-File -FilePath $readmeFile -Encoding UTF8 -NoNewline
     Write-Host "  Generated README.txt" -ForegroundColor Green
 }
@@ -1642,24 +1713,84 @@ function Generate-Version {
         [int]$ExeCount,
         [int]$DllCount,
         [string]$OneApiVersion,
-        [string]$MsmpiVersion
+        [string]$MsmpiVersion,
+
+        # --- new optional fields (safe defaults) ---
+        [bool]$LibxcEnabled = $false,
+        [bool]$MpiEnabled   = $true,
+        [bool]$OpenmpEnabled = $true,
+
+        # Human-ish but still machine-readable backends
+        [string]$FftBackend   = "Intel DFTI (MKL)",
+        [string]$BlasBackend  = "Intel MKL",
+        [string]$LapackBackend= "Intel MKL",
+
+        # Tool versions (best-effort)
+        [string]$CmakeVersion = $null,
+        [string]$NinjaVersion = $null,
+
+        # QE git metadata (best-effort)
+        [string]$QeGitDescribe = $null,
+        [string]$QeCommit = $null,
+
+        # Traceability: toolchain repo commit (CI)
+        [string]$ToolchainCommit = $env:GITHUB_SHA
     )
+
     $versionFile = Join-Path $DistRoot "VERSION.txt"
+
+    function _norm([string]$s, [string]$fallback="unknown") {
+        if ([string]::IsNullOrWhiteSpace($s)) { return $fallback }
+        return $s.Trim()
+    }
+
+    # Best-effort discover versions if not provided
+    if ([string]::IsNullOrWhiteSpace($CmakeVersion)) {
+        try {
+            $line = (& cmake --version 2>$null | Select-Object -First 1)
+            if ($line -match 'cmake version\s+(.+)$') { $CmakeVersion = $matches[1].Trim() }
+        } catch {}
+    }
+    if ([string]::IsNullOrWhiteSpace($NinjaVersion)) {
+        try {
+            $NinjaVersion = (& ninja --version 2>$null | Select-Object -First 1)
+        } catch {}
+    }
+
     $content = @"
 build_date_utc=$BuildDateUtc
-git_repo=QMatSuite/qmatsuite-toolchain
+toolchain_repo=github.com/QMatSuite/QMatSuite
+toolchain_commit=$(_norm $ToolchainCommit)
+
 workflow=qe-windows-oneapi-msmpi-release
-qe_version_or_commit=$QeVersion
-build_mode=$BuildMode
+qe_version_or_commit=$(_norm $QeVersion)
+qe_git_describe=$(_norm $QeGitDescribe)
+qe_commit=$(_norm $QeCommit)
+
+build_mode=$(_norm $BuildMode)
 exe_count=$ExeCount
 dll_count=$DllCount
-oneapi_version=$OneApiVersion
-msmpi_version=$MsmpiVersion
+
+oneapi_version=$(_norm $OneApiVersion)
+msmpi_version=$(_norm $MsmpiVersion)
+
+libxc=$([string]::new(@("OFF","ON")[[int]$LibxcEnabled]))
+mpi=$([string]::new(@("OFF","ON")[[int]$MpiEnabled]))
+openmp=$([string]::new(@("OFF","ON")[[int]$OpenmpEnabled]))
+
+fft_backend=$($FftBackend)
+blas_backend=$($BlasBackend)
+lapack_backend=$($LapackBackend)
+
+cmake_version=$(_norm $CmakeVersion)
+ninja_version=$(_norm $NinjaVersion)
 "@
-    
+
     $content | Out-File -FilePath $versionFile -Encoding UTF8 -NoNewline
     Write-Host "  Generated VERSION.txt" -ForegroundColor Green
 }
+
+
 
 function Clean-SmokeTestFiles {
     param(
@@ -2116,7 +2247,7 @@ $buildPath = Join-Path $RepoRoot $BuildDir
 $cmakeCache = Join-Path $buildPath "CMakeCache.txt"
 $libxcEnabled = Get-CMakeCacheBool -CachePath $cmakeCache -Key "QE_ENABLE_LIBXC"
 
-if ($libxcEnabled -eq "ON") {
+if ($libxcEnabled) {
     Write-Host "libxc on (QE_ENABLE_LIBXC=ON) -> will stage libxc runtime bin/*" -ForegroundColor Green
 
     $libxcBin = Join-Path $RepoRoot "upstream\libxc\install\bin"
@@ -2288,8 +2419,21 @@ $dllCount = ($binFiles | Where-Object { $_.Extension -eq ".dll" }).Count
 $hasMsmpiLauncher = (Test-Path (Join-Path $DistBinDir "mpiexec.exe")) -or (Test-Path (Join-Path $DistBinDir "msmpiexec.exe"))
 
 # Generate README.txt and VERSION.txt (using actual counts from dist/bin)
+$libxcEnabled = Get-CMakeCacheBool -CachePath $cmakeCache -Key "QE_ENABLE_LIBXC"
+$mpiEnabled = Get-CMakeCacheBool -CachePath $cmakeCache -Key "QE_ENABLE_MPI"
+$openmpEnabled = Get-CMakeCacheBool -CachePath $cmakeCache -Key "QE_ENABLE_OPENMP"
+$qeGitDescribe = ""
+$qeCommit = ""
+try {
+  $qeCommit = (& git -C $QeSourceRoot rev-parse HEAD 2>$null).Trim()
+  $qeGitDescribe = (& git -C $QeSourceRoot describe --tags --always --dirty 2>$null).Trim()
+} catch {}
+
 Generate-Readme -DistRoot $DistRoot -QeVersion $qeVersion -BuildDateUtc $buildDateUtc -ExeCount $exeCount -DllCount $dllCount -HasMsmpiLauncher $hasMsmpiLauncher
-Generate-Version -DistRoot $DistRoot -QeVersion $qeVersion -BuildDateUtc $buildDateUtc -BuildMode $buildMode -ExeCount $exeCount -DllCount $dllCount -OneApiVersion $oneApiVersion -MsmpiVersion $msmpiVersion
+Generate-Version -DistRoot $DistRoot -QeVersion $qeVersion -BuildDateUtc $buildDateUtc `
+    -BuildMode $buildMode -ExeCount $exeCount -DllCount $dllCount -OneApiVersion $oneApiVersion `
+    -MsmpiVersion $msmpiVersion -LibxcEnabled $libxcEnabled -MpiEnabled $mpiEnabled `
+    -OpenmpEnabled $openmpEnabled -QeGitDescribe $qeGitDescribe -QeCommit $qeCommit
 
 # Verify distribution contents
 $verifyResult = Verify-DistContents -DistRoot $DistRoot -DistBinDir $DistBinDir
