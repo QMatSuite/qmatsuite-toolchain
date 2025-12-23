@@ -553,7 +553,13 @@ $cmakeConfigure = @(
     "-DQE_MBD_INTERNAL=ON",            # Use internal MBD (submodule exists)
     "-DQE_DEVICEXLIB_INTERNAL=ON",     # Use internal DeviceXlib (submodule exists)
     "-DQE_ENABLE_ENVIRON=NO",          # Disable Environ (avoids git submodule issues)
-    "-DQE_FFTW_VENDOR=$FftwVendor"     # FFT vendor (user-selected)
+    "-DQE_FFTW_VENDOR=$FftwVendor",     # FFT vendor (user-selected)
+    "-DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=`"$($RepoRoot)\scripts\cmake\qe-win-versioninfo.cmake`"",
+    "-DQMS_EMBED_VERSIONINFO=ON",
+    "-DQMS_PRODUCT=`"Quantum ESPRESSO`"",
+    "-DQMS_COMPANY=`"QMatSuite`"",
+    "-DQMS_VERSION_STR=`"7.5.0`"",
+    "-DQMS_BUILD_FLAVOR=`"Windows oneAPI/MS-MPI`""
 )
 
 # Force BLAS_LIBRARIES and LAPACK_LIBRARIES to full absolute paths

@@ -48,3 +48,14 @@ if ($bad.Count -eq 0) {
   $results | Export-Csv "$root\sign-report.csv" -NoTypeInformation -Encoding UTF8
   Write-Host "Report saved to: $root\sign-report.csv"
 }
+
+
+# Alternative
+# choco install sysinternals -y
+C:\ProgramData\chocolatey\lib\sysinternals\tools\sigcheck64.exe -c -s "C:\Users\$(whoami)\qmatsuite-toolchain\toolchains\quantum_espresso\windows\oneapi\dist\win-oneapi" > sigcheck.csv
+C:\ProgramData\chocolatey\lib\sysinternals\tools\sigcheck64.exe -q -m -i -s "C:\Users\$(whoami)\qmatsuite-toolchain\toolchains\quantum_espresso\windows\oneapi\dist\win-oneapi\bin" 
+Import-Csv sigcheck.csv |
+  Where-Object { $_.Verified -ne "Signed" } |
+  ForEach-Object {
+    Write-Error "NOT SIGNED: $($_.Path)"
+  }
