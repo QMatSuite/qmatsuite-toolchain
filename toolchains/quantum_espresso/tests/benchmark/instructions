@@ -19,3 +19,32 @@ mpiexec.exe -n 4 pw.exe -in si100.in > si100_qe6.4.1_MSMPI.out 2>&1
 
 $env:OMP_NUM_THREADS = "1"
 $env:MKL_NUM_THREADS = "8"
+
+
+$root = "C:\Users\hnhua\Downloads\qe-7.5-win-oneapi-msmpi"
+
+$files = Get-ChildItem -Path $root -Recurse -File -Include *.exe,*.dll -ErrorAction SilentlyContinue
+
+$results = $files | ForEach-Object {
+  $sig = Get-AuthenticodeSignature -FilePath $_.FullName
+  [pscustomobject]@{
+    Path   = $_.FullName
+    Status = $sig.Status
+    Signed = ($sig.Status -eq 'Valid')
+    Signer = $sig.SignerCertificate.Subject
+  }
+}
+
+# 列出所有“不是 Valid”的（包括未签名/无效/未知等）
+$bad = $results | Where-Object { $_.Status -ne 'Valid' }
+
+$bad | Sort-Object Status, Path | Format-Table -AutoSize
+
+if ($bad.Count -eq 0) {
+  Write-Host "✅ All EXE/DLL are signed and VALID." -ForegroundColor Green
+} else {
+  Write-Host "❌ Found $($bad.Count) file(s) not validly signed." -ForegroundColor Red
+  # 可选：导出报告
+  $results | Export-Csv "$root\sign-report.csv" -NoTypeInformation -Encoding UTF8
+  Write-Host "Report saved to: $root\sign-report.csv"
+}

@@ -67,6 +67,30 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Test Variables
+        shell: pwsh
+        run: |
+          $distDir = "dist/win-oneapi-msmpi"
+          $qeVersion = "7.5"
+          $date = Get-Date -Format "yyyyMMdd"
+          $buildMode = "${{ inputs.build_mode }}"
+          $vt = "win-oneapi-msmpi"
+          if ($buildMode -and $buildMode -ne "all") {
+            $vt = "$vt-$buildMode"
+          }
+          if ("${{ inputs.with_libxc }}" -eq "true"){
+            $vt = "$vt-libxc"
+          }
+          # Immutable snapshot tag
+          $releaseTag = "qe-$qeVersion-$vt-$date-SHORTSHA"
+          Write-Host "release tag would be: $releaseTag"
+          if ("${{ inputs.with_libxc }}" -eq "true") {
+            $zipName = "qe-$qeVersion-win-oneapi-msmpi-libxc.zip"
+            Write-Host "libxc detected → using libxc zip name: $zipName"
+          } else {
+            $zipName = "qe-$qeVersion-win-oneapi-msmpi.zip"
+            Write-Host "libxc not detected → using standard zip name: $zipName"
+          }
 
       - name: Cache QE source/build
         if: inputs.clean_compile != true
@@ -383,7 +407,7 @@ jobs:
           $distDir = "dist/win-oneapi-msmpi"
           $qeVersion = "7.5"
       
-          if (${{ inputs.with_libxc }} == true) {
+          if ("${{ inputs.with_libxc }}" -eq "true") {
             $zipName = "qe-$qeVersion-win-oneapi-msmpi-libxc.zip"
             Write-Host "libxc detected → using libxc zip name"
           } else {
@@ -451,7 +475,7 @@ jobs:
             if ($buildMode -and $buildMode -ne "all") {
               $variant = "$variant-$buildMode"
             }
-            if (${{ inputs.with_libxc }} == true){
+            if ("${{ inputs.with_libxc }}" -eq "true"){
               $variant = "$variant-libxc"
             }
       

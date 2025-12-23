@@ -1412,7 +1412,36 @@ function Copy-OneApiLicenses {
         }
     }
     
-    # Strategy 2: Try versioned path (e.g., licensing\2025.3\licensing\2025.3\license.htm)
+    # Strategy 2.1: Try versioned path (e.g., 2025.3\licensing\2025.3\license.htm)
+    if ($copied.Count -eq 0) {
+        $licensingBase = $OneApiRoot
+        if (Test-Path $licensingBase) {
+            # Find versioned directories
+            $versionDirs = Get-ChildItem -Path $licensingBase -Directory -ErrorAction SilentlyContinue | 
+                Where-Object { $_.Name -match '^\d+\.\d+' } | 
+                Sort-Object { [Version]$_.Name } -Descending
+            
+            foreach ($versionDir in $versionDirs) {
+                $versionLicensePath = Join-Path $versionDir.FullName "licensing"
+                if (Test-Path $versionLicensePath) {
+                    $versionSubDirs = Get-ChildItem -Path $versionLicensePath -Directory -ErrorAction SilentlyContinue
+                    foreach ($subDir in $versionSubDirs) {
+                        $licenseFile = Join-Path $subDir.FullName "license.htm"
+                        if (Test-Path $licenseFile) {
+                            $dst = Join-Path $oneApiLicenseDir "license.htm"
+                            Copy-Item -Force $licenseFile $dst
+                            $copied += "license.htm"
+                            Write-Host "  Copied oneAPI license: license.htm (from $($versionDir.Name))" -ForegroundColor Green
+                            break
+                        }
+                    }
+                    if ($copied.Count -gt 0) { break }
+                }
+            }
+        }
+    }
+    
+    # Strategy 2.2: Try versioned path (e.g., licensing\2025.3\licensing\2025.3\license.htm)
     if ($copied.Count -eq 0) {
         $licensingBase = Join-Path $OneApiRoot "licensing"
         if (Test-Path $licensingBase) {
@@ -1440,7 +1469,7 @@ function Copy-OneApiLicenses {
             }
         }
     }
-    
+
     # Strategy 3: Fallback - search for any license.htm in licensing directory
     if ($copied.Count -eq 0) {
         $licensingBase = Join-Path $OneApiRoot "licensing"
@@ -1549,6 +1578,10 @@ Included components
 3) Microsoft MPI (MS-MPI) Runtime ($MsmpiVersion)
    License: Microsoft Software License Terms
    License text: licenses/microsoft-msmpi/
+
+4) External libraries linked by Quantum ESPRESSO
+   License: Check individual library licenses
+   License text: licenses/quantum-espresso/external/
 
 Notes
 
@@ -1684,13 +1717,13 @@ Example: on a 16-core CPU, try mpiexec -n 4 with OMP_NUM_THREADS=4 as a starting
 
 About QMatSuite (GUI)
 
-If you want a more user-friendly workflow (project setup, input generation, job management, result browsing),
-check out QMatSuite — a modern GUI that can drive Quantum ESPRESSO and other engines.
+If you want a more user-friendly workflow (modern user interface, project management, input generation, job management, result browsing),
+check out QMatSuite — a modern GUI that can drive Quantum ESPRESSO and other engines. It is free and open source.
 
 - Project home / downloads: www.qmatsuite.com
 - Source code / releases: github.com/QMatSuite
 
-This repo/toolchain exists as the "high-performance, reproducible build backend" for QMatSuite,
+This repo/toolchain not only produces ready-to-run executables, but also serves as the "high-performance, reproducible build backend" for QMatSuite,
 and as a reference compilation recipe for anyone exploring QE/Wannier/etc. on Windows.
 
 Licensing (important)
