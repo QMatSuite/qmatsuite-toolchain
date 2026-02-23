@@ -371,7 +371,6 @@ jobs:
             --issuer "$APPLE_NOTARY_ISSUER_ID" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
             --key "$key_file" \
-            --wait
           rm -f "$key_file"
 
       - name: Attest build provenance
