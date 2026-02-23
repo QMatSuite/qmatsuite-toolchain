@@ -326,7 +326,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          IDENTITY="Developer ID Application: QMatSuite ($APPLE_TEAM_ID)"
+          IDENTITY="Developer ID Application: ${{ secrets.DEVELOPER_NAME }} ($APPLE_TEAM_ID)"
 
           shopt -s nullglob
           for dylib in "$QE_STAGE_DIR/lib/"*.dylib; do
