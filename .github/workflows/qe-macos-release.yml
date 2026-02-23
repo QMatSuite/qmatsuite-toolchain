@@ -227,6 +227,46 @@ jobs:
           set -euo pipefail
           bash scripts/bundle_macos_dylibs.sh "$QE_STAGE_DIR"
 
+      - name: Validate bundled dylib references (no Homebrew or @rpath)
+        run: |
+          set -euo pipefail
+
+          fail=0
+
+          check_item() {
+            local item="$1"
+            [ -f "$item" ] || return 0
+
+            if otool -L "$item" | grep -E "/opt/homebrew|/usr/local|@rpath/" >/dev/null 2>&1; then
+              echo "ERROR: $item has forbidden references:"
+              otool -L "$item"
+              fail=1
+            fi
+
+            # Also ensure no LC_RPATH entries point to Homebrew-style paths.
+            if otool -l "$item" | grep -E "/opt/homebrew|/usr/local" >/dev/null 2>&1; then
+              echo "ERROR: $item has LC_RPATH entries with Homebrew-style paths:"
+              otool -l "$item" | awk '
+                $1=="cmd" && $2=="LC_RPATH" {in=1; next}
+                in && $1=="path" {print "  " $0; in=0}
+              ' | grep -E "/opt/homebrew|/usr/local" || true
+              fail=1
+            fi
+          }
+
+          shopt -s nullglob
+          for exe in "$QE_STAGE_DIR"/bin/*.x; do
+            check_item "$exe"
+          done
+          for dylib in "$QE_STAGE_DIR"/lib/*.dylib; do
+            check_item "$dylib"
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            echo "One or more staged artifacts reference Homebrew paths or @rpath; failing validation."
+            exit 1
+          fi
+
       - name: Verify staged distribution exists
         run: |
           set -euo pipefail
