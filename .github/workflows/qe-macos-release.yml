@@ -370,7 +370,7 @@ jobs:
           xcrun notarytool submit "$ZIP_PATH" \
             --issuer "$APPLE_NOTARY_ISSUER_ID" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
-            --key "$key_file" \
+            --key "$key_file"
           rm -f "$key_file"
 
       - name: Attest build provenance
