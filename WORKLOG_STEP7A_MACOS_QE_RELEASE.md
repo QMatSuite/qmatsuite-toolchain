@@ -222,3 +222,33 @@ lib_count=3
 ### K) Asset naming confirmation
 - Zip asset name remains unchanged: `qe-7.5-macos-arm64-openmp.zip`
 - Internal layout now includes both `bin/` and `lib/`.
+
+## Step 7A-cache: Split build/sign and add stage cache (2026-02-23)
+
+### Goal
+Avoid recompiling QE when signing/notarization fails and the workflow is rerun, while still forcing recompile when build logic/flags change.
+
+### Implementation
+Updated `.github/workflows/qe-macos-release.yml` to two-job flow:
+
+1. `build_stage`
+- Builds + stages + bundles QE (or skips build on cache hit).
+- Caches staged distribution via `actions/cache@v4`:
+  - Path: `.cache/qe-macos-release/stage`
+  - Key:
+    - `qe-macos-stage-${{ runner.os }}-${{ inputs.build_mode }}-${{ hashFiles('.github/workflows/qe-macos-release.yml', 'scripts/bundle_macos_dylibs.sh') }}`
+- Uploads staged artifact:
+  - `qe-macos-stage-${{ github.sha }}-${{ inputs.build_mode }}`
+
+2. `sign_package_attest_release`
+- Depends on `build_stage` (`needs: build_stage`).
+- Downloads staged artifact.
+- Runs signing/notarization/package/release only.
+
+### Rerun behavior
+- If signing/notarization fails, `Re-run failed jobs` reruns only `sign_package_attest_release` (no compile).
+- If full workflow is rerun with same build logic and same `build_mode`, stage cache can short-circuit compile in `build_stage`.
+- If build flags/workflow logic or bundling script changes, `hashFiles(...)` changes and cache key invalidates, forcing rebuild.
+
+### Validation
+- YAML syntax check passed after change.
