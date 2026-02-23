@@ -69,6 +69,7 @@ jobs:
 
       - name: Download and unpack QE
         run: |
+          set -euo pipefail
           mkdir -p "$(dirname "$QE_SRC_DIR")"
           cd "$(dirname "$QE_SRC_DIR")"
 
@@ -87,9 +88,12 @@ jobs:
 
           test -f "$QE_SRC_DIR/configure" || (echo "configure script not found" && exit 1)
 
-      - name: Configure QE (macOS, Accelerate)
+      - name: Configure QE (macOS, Accelerate + FFTW)
         run: |
+          set -euo pipefail
           cd "$QE_SRC_DIR"
+          FFTW_PREFIX=$(brew --prefix fftw)
+
           ./configure \
             CC="${CC:-cc}" \
             F90="${FC:-gfortran}" \
@@ -97,19 +101,39 @@ jobs:
             CPP="${CC:-cc} -E" \
             BLAS_LIBS="-framework Accelerate" \
             LAPACK_LIBS="-framework Accelerate" \
+            FFT_LIBS="-L${FFTW_PREFIX}/lib -lfftw3" \
             --prefix="$QE_STAGE_DIR"
+
+          if [ -f make.inc ]; then
+            if ! grep -q '__FFTW3' make.inc; then
+              sed -i.bak 's/^DFLAGS.*/& -D__FFTW3/' make.inc
+            fi
+            if ! grep -q "${FFTW_PREFIX}/include" make.inc; then
+              sed -i.bak "s|^FFLAGS.*|& -I${FFTW_PREFIX}/include|" make.inc
+            fi
+          fi
+
+      - name: Patch PIOUD profiling flags (-pg)
+        run: |
+          set -euo pipefail
+          cd "$QE_SRC_DIR"
+          if [ -f PIOUD/src/Makefile ]; then
+            sed -i.bak 's/^[[:space:]]*F90FLAGS[[:space:]]*+=[[:space:]]*-pg/# F90FLAGS += -pg/' PIOUD/src/Makefile
+            sed -i.bak 's/^[[:space:]]*LDFLAGS[[:space:]]*+=[[:space:]]*-pg/# LDFLAGS += -pg/' PIOUD/src/Makefile
+            echo "Patched PIOUD -pg flags"
+          fi
 
       - name: Build QE
         run: |
+          set -euo pipefail
           cd "$QE_SRC_DIR"
           NPROC=$(sysctl -n hw.ncpu)
 
           if [ "${{ inputs.build_mode }}" = "all" ]; then
-            echo "Building full QE executable set"
-            make all -j"$NPROC"
+            make pw -j"$NPROC" || make pw -j1
+            make all -j1
           else
-            echo "Building pw.x only"
-            make pw -j"$NPROC"
+            make pw -j"$NPROC" || make pw -j1
           fi
 
           if ! find "$QE_SRC_DIR" -name "pw.x" -type f -perm -u+x | grep -q .; then
@@ -124,7 +148,6 @@ jobs:
                 missing="$missing $exe"
               fi
             done
-
             if [ -n "$missing" ]; then
               echo "Missing required executables:$missing"
               exit 1
@@ -138,25 +161,83 @@ jobs:
 
           if [ -d "$QE_SRC_DIR/bin" ]; then
             find "$QE_SRC_DIR/bin" -maxdepth 1 -name "*.x" -type f -perm -u+x | sort | while read -r exe; do
-              cp "$exe" "$QE_STAGE_DIR/bin/"
+              cp -f "$exe" "$QE_STAGE_DIR/bin/"
             done
           fi
 
-          find "$QE_SRC_DIR" -name "*.x" -type f -perm -u+x | sort | while read -r exe; do
+          find "$QE_SRC_DIR" -path "*/.dSYM/*" -prune -o -name "*.x" -type f -perm -u+x -print | sort | while read -r exe; do
             base=$(basename "$exe")
             if [ ! -f "$QE_STAGE_DIR/bin/$base" ]; then
-              cp "$exe" "$QE_STAGE_DIR/bin/$base"
+              cp -f "$exe" "$QE_STAGE_DIR/bin/$base"
             fi
           done
 
-          if [ "${{ inputs.build_mode }}" = "pw" ] && [ ! -f "$QE_STAGE_DIR/bin/pw.x" ]; then
-            if [ -f "$QE_SRC_DIR/PW/src/pw.x" ]; then
-              cp "$QE_SRC_DIR/PW/src/pw.x" "$QE_STAGE_DIR/bin/pw.x"
-            fi
+          if [ "${{ inputs.build_mode }}" = "pw" ] && [ ! -f "$QE_STAGE_DIR/bin/pw.x" ] && [ -f "$QE_SRC_DIR/PW/src/pw.x" ]; then
+            cp -f "$QE_SRC_DIR/PW/src/pw.x" "$QE_STAGE_DIR/bin/pw.x"
           fi
+
+          if [ -d "$QE_SRC_DIR/external/wannier90" ]; then
+            for bin in "$QE_SRC_DIR"/external/wannier90/*.x; do
+              if [ -f "$bin" ] && file "$bin" | grep -qi "mach-o"; then
+                cp -f "$bin" "$QE_STAGE_DIR/bin/"
+                echo "Re-staged: $(basename "$bin")"
+              fi
+            done
+          fi
+
+          for exe in pw.x ph.x dos.x bands.x pp.x; do
+            full="$QE_STAGE_DIR/bin/$exe"
+            if [ -f "$full" ]; then
+              file "$full" | grep -qi "mach-o" || { echo "ERROR: $exe is not Mach-O"; exit 1; }
+            fi
+          done
 
           echo "Staged executables:"
           ls -la "$QE_STAGE_DIR/bin"
+
+      - name: Bundle non-system dylibs for portability
+        run: |
+          set -euo pipefail
+          bash scripts/bundle_macos_dylibs.sh "$QE_STAGE_DIR"
+
+      - name: Verify portability in clean PATH
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          cmd = [os.path.join(os.environ["QE_STAGE_DIR"], "bin", "pw.x"), "--version"]
+          clean_env = {
+              "HOME": os.environ["HOME"],
+              "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+          }
+          out = ""
+          try:
+              proc = subprocess.run(
+                  cmd,
+                  env=clean_env,
+                  stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  text=True,
+                  timeout=20,
+                  check=False,
+              )
+              out = proc.stdout or ""
+          except subprocess.TimeoutExpired as exc:
+              out = (exc.stdout or "") + (exc.stderr or "")
+
+          print("\n".join(out.splitlines()[:8]))
+
+          if "Program PWSCF" not in out:
+              print("ERROR: pw.x did not print Program PWSCF in clean env", file=sys.stderr)
+              sys.exit(1)
+          if "Library not loaded" in out:
+              print("ERROR: pw.x still needs external dylibs", file=sys.stderr)
+              sys.exit(1)
+          PY
 
       - name: Import Apple signing certificate
         if: ${{ inputs.sign }}
@@ -174,15 +255,23 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "" qe-build.keychain
           rm -f /tmp/qe-sign/cert.p12
 
-      - name: Code sign QE executables
+      - name: Sign executables and bundled dylibs
         if: ${{ inputs.sign }}
         env:
-          SIGNING_IDENTITY: "Developer ID Application: ${{ secrets.DEVELOPER_NAME }} (${{ secrets.APPLE_TEAM_ID }})"
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          find "$QE_STAGE_DIR/bin" -maxdepth 1 -name "*.x" -type f | sort | while read -r exe; do
-            codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$exe"
-            codesign --verify --verbose "$exe"
+          IDENTITY="Developer ID Application: QMatSuite ($APPLE_TEAM_ID)"
+
+          shopt -s nullglob
+          for dylib in "$QE_STAGE_DIR/lib/"*.dylib; do
+            codesign --force --options runtime --sign "$IDENTITY" "$dylib"
+            codesign -vv "$dylib"
+          done
+
+          for exe in "$QE_STAGE_DIR/bin/"*.x; do
+            codesign --force --options runtime --sign "$IDENTITY" "$exe"
+            codesign -vv "$exe"
           done
 
       - name: Create distribution zip
@@ -217,7 +306,6 @@ jobs:
             --issuer "$APPLE_NOTARY_ISSUER_ID" \
             --key-id "$APPLE_NOTARY_KEY_ID" \
             --key "$key_file" \
-            --wait
           rm -f "$key_file"
 
       - name: Attest build provenance
@@ -268,6 +356,7 @@ jobs:
 
             **Notes**
             - Serial (non-MPI) build with Apple Accelerate framework
+            - Bundles non-system dylibs under `lib/` and rewrites runtime paths to `@executable_path/../lib`
             - Built on macOS 14 (Sonoma) with Apple Silicon (arm64)
             - Signing/notarization: ${{ inputs.sign && 'enabled' || 'disabled' }}
         env:

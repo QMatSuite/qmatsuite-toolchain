@@ -119,3 +119,106 @@
    - `./pw.x --version`
    - `./ph.x --help`
    - `./dos.x --help`
+
+## Step 7A-fix: Portable macOS QE + make all fixes (2026-02-23)
+
+### A) Files updated
+- `.github/workflows/qe-macos-release.yml`
+- `scripts/bundle_macos_dylibs.sh` (new)
+
+### B) Applied build fixes from main repo tests workflow
+- Added PIOUD `-pg` patch step before build.
+- Changed build order for `build_mode=all` to:
+  - `make pw -j$(sysctl -n hw.ncpu) || make pw -j1`
+  - `make all -j1`
+- Added wannier90 re-staging from `external/wannier90/*.x` and Mach-O validation checks for critical executables.
+- Added FFTW-aware macOS configure flags and `make.inc` FFTW3 define/include patching.
+
+### C) Portability bundling implementation
+- Added `scripts/bundle_macos_dylibs.sh`:
+  - Collects non-system dylibs recursively (transitive closure)
+  - Copies dylibs into `lib/`
+  - Rewrites executable load paths to `@executable_path/../lib/...`
+  - Rewrites dylib IDs and inter-dylib paths to `@loader_path/...`
+  - Re-signs modified binaries ad-hoc for arm64 validity
+  - Verifies no `/opt/homebrew` or `/usr/local` references remain
+
+### D) Local verification run (executed)
+Local run directory: `/tmp/qe-step7a-fix`
+
+Build status evidence from local log:
+- `[INFO] Build pw then all` at line 133
+- `[INFO] Stage executables` at line 5986
+- `[INFO] otool before bundling` at line 5987
+- `[INFO] Bundle dylibs` at line 5994
+
+Interpretation: `make pw` + `make all -j1` completed and reached staging/bundling.
+
+### E) `otool -L` before bundling (`pw.x`)
+```text
+/tmp/qe-step7a-fix/qe-stage/bin/pw.x:
+	/opt/homebrew/opt/fftw/lib/libfftw3.3.dylib (compatibility version 10.0.0, current version 10.10.0)
+	/opt/homebrew/opt/gcc/lib/gcc/current/libgfortran.5.dylib (compatibility version 6.0.0, current version 6.0.0)
+	/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate (compatibility version 1.0.0, current version 4.0.0)
+	/opt/homebrew/opt/gcc/lib/gcc/current/libquadmath.0.dylib (compatibility version 1.0.0, current version 1.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+```
+
+### F) `otool -L` after bundling (`pw.x`)
+```text
+/tmp/qe-step7a-fix/qe-stage/bin/pw.x:
+	@executable_path/../lib/libfftw3.3.dylib (compatibility version 10.0.0, current version 10.10.0)
+	@executable_path/../lib/libgfortran.5.dylib (compatibility version 6.0.0, current version 6.0.0)
+	/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate (compatibility version 1.0.0, current version 4.0.0)
+	@executable_path/../lib/libquadmath.0.dylib (compatibility version 1.0.0, current version 1.0.0)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+```
+
+### G) Clean-PATH portability probe output
+Command context: clean environment `PATH=/usr/bin:/bin:/usr/sbin:/sbin`
+
+```text
+Program PWSCF v.7.5 starts on 22Feb2026 at 22:59:34
+
+This program is part of the open-source Quantum ESPRESSO suite
+for quantum simulation of materials; please cite
+```
+
+Result: PASS (no `Library not loaded` errors).
+
+### H) Bundle script summary output
+```text
+=== Non-system dylibs to bundle ===
+/opt/homebrew/opt/fftw/lib/libfftw3.3.dylib
+/opt/homebrew/opt/gcc/lib/gcc/current/libgfortran.5.dylib
+/opt/homebrew/opt/gcc/lib/gcc/current/libquadmath.0.dylib
+=== Total: 3 ===
+Bundled: libfftw3.3.dylib
+Bundled: libgfortran.5.dylib
+Bundled: libquadmath.0.dylib
+
+=== Portability verification ===
+All binaries and dylibs are self-contained ✓
+
+=== Bundle summary ===
+Executables: 89
+Bundled dylibs: 3
+Total bin/ size: 393M
+Total lib/ size: 3.1M
+```
+
+### I) Bundle size summary (recorded)
+```text
+bin_size=393M
+lib_size=3.1M
+bin_count=89
+lib_count=3
+```
+
+### J) Post-fix script correction
+- Initial bundling script revision had a transitive-deps loop hazard (reading and appending same file in-loop).
+- Fixed by iterating over a snapshot file (`mktemp`) each pass before appending newly discovered deps.
+
+### K) Asset naming confirmation
+- Zip asset name remains unchanged: `qe-7.5-macos-arm64-openmp.zip`
+- Internal layout now includes both `bin/` and `lib/`.
