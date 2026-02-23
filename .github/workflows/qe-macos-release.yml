@@ -247,8 +247,8 @@ jobs:
             if otool -l "$item" | grep -E "/opt/homebrew|/usr/local" >/dev/null 2>&1; then
               echo "ERROR: $item has LC_RPATH entries with Homebrew-style paths:"
               otool -l "$item" | awk '
-                $1=="cmd" && $2=="LC_RPATH" {in=1; next}
-                in && $1=="path" {print "  " $0; in=0}
+                $1=="cmd" && $2=="LC_RPATH" {in_rpath_cmd=1; next}
+                in_rpath_cmd && $1=="path" {print "  " $0; in_rpath_cmd=0}
               ' | grep -E "/opt/homebrew|/usr/local" || true
               fail=1
             fi
@@ -309,6 +309,9 @@ jobs:
               sys.exit(1)
           if "Library not loaded" in out:
               print("ERROR: pw.x still needs external dylibs", file=sys.stderr)
+              sys.exit(1)
+          if "/opt/homebrew" in out or "/usr/local" in out:
+              print("ERROR: pw.x output still references Homebrew paths", file=sys.stderr)
               sys.exit(1)
           PY
 
