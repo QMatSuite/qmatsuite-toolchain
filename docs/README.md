@@ -10,3 +10,6 @@ Future content might include:
 - Versioning policy for QE and related tools
 - Notes on packaging and redistribution
 
+Current references:
+
+- `docs/QE_RELEASE_ASSET_NAMING.md` - Release tags/assets expected by installer logic.

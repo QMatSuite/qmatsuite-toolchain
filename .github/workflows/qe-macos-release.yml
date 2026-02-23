@@ -1,0 +1,274 @@
+name: QE macOS Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'Build mode: pw (pw only) or all (all executables)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - pw
+          - all
+      release_tag:
+        description: 'Release tag (empty = auto-generate from date+sha)'
+        required: false
+        default: ''
+        type: string
+      release_draft:
+        description: 'Create as draft release'
+        required: false
+        default: false
+        type: boolean
+      sign:
+        description: 'Code sign and notarize QE release artifacts'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    env:
+      QE_VERSION: "qe-7.5"
+      QE_SEMVER: "7.5"
+      QE_TARBALL_URL: "https://gitlab.com/QEF/q-e/-/archive/qe-7.5/q-e-qe-7.5.tar.gz"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up build directories
+        run: |
+          echo "QE_SRC_DIR=$RUNNER_TEMP/q-e-src" >> "$GITHUB_ENV"
+          echo "QE_STAGE_DIR=$RUNNER_TEMP/qe-stage" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (macOS)
+        run: |
+          brew update
+          brew install gcc fftw wget make
+
+          BREW_GCC_VERSION=$(brew list --versions gcc | awk '{print $2}' | cut -d. -f1 || true)
+          if [ -n "$BREW_GCC_VERSION" ]; then
+            echo "CC=gcc-$BREW_GCC_VERSION" >> "$GITHUB_ENV"
+            echo "FC=gfortran-$BREW_GCC_VERSION" >> "$GITHUB_ENV"
+            echo "Using Homebrew gcc-$BREW_GCC_VERSION / gfortran-$BREW_GCC_VERSION"
+          else
+            echo "CC=cc" >> "$GITHUB_ENV"
+            echo "FC=gfortran" >> "$GITHUB_ENV"
+            echo "Homebrew gcc version not detected, falling back to cc/gfortran"
+          fi
+
+      - name: Download and unpack QE
+        run: |
+          mkdir -p "$(dirname "$QE_SRC_DIR")"
+          cd "$(dirname "$QE_SRC_DIR")"
+
+          wget -q "$QE_TARBALL_URL" -O qe.tar.gz
+          tar -xzf qe.tar.gz
+          rm qe.tar.gz
+
+          EXTRACTED=$(find . -maxdepth 1 -type d -name "q-e-qe-7.5*" | head -1)
+          if [ -z "$EXTRACTED" ]; then
+            echo "Failed to find extracted QE source directory"
+            exit 1
+          fi
+
+          rm -rf "$QE_SRC_DIR"
+          mv "$EXTRACTED" "$QE_SRC_DIR"
+
+          test -f "$QE_SRC_DIR/configure" || (echo "configure script not found" && exit 1)
+
+      - name: Configure QE (macOS, Accelerate)
+        run: |
+          cd "$QE_SRC_DIR"
+          ./configure \
+            CC="${CC:-cc}" \
+            F90="${FC:-gfortran}" \
+            MPIF90="${FC:-gfortran}" \
+            CPP="${CC:-cc} -E" \
+            BLAS_LIBS="-framework Accelerate" \
+            LAPACK_LIBS="-framework Accelerate" \
+            --prefix="$QE_STAGE_DIR"
+
+      - name: Build QE
+        run: |
+          cd "$QE_SRC_DIR"
+          NPROC=$(sysctl -n hw.ncpu)
+
+          if [ "${{ inputs.build_mode }}" = "all" ]; then
+            echo "Building full QE executable set"
+            make all -j"$NPROC"
+          else
+            echo "Building pw.x only"
+            make pw -j"$NPROC"
+          fi
+
+          if ! find "$QE_SRC_DIR" -name "pw.x" -type f -perm -u+x | grep -q .; then
+            echo "pw.x not found after build"
+            exit 1
+          fi
+
+          if [ "${{ inputs.build_mode }}" = "all" ]; then
+            missing=""
+            for exe in pw.x ph.x dos.x bands.x pp.x; do
+              if ! find "$QE_SRC_DIR" -name "$exe" -type f -perm -u+x | grep -q .; then
+                missing="$missing $exe"
+              fi
+            done
+
+            if [ -n "$missing" ]; then
+              echo "Missing required executables:$missing"
+              exit 1
+            fi
+          fi
+
+      - name: Stage executables
+        run: |
+          set -euo pipefail
+          mkdir -p "$QE_STAGE_DIR/bin"
+
+          if [ -d "$QE_SRC_DIR/bin" ]; then
+            find "$QE_SRC_DIR/bin" -maxdepth 1 -name "*.x" -type f -perm -u+x | sort | while read -r exe; do
+              cp "$exe" "$QE_STAGE_DIR/bin/"
+            done
+          fi
+
+          find "$QE_SRC_DIR" -name "*.x" -type f -perm -u+x | sort | while read -r exe; do
+            base=$(basename "$exe")
+            if [ ! -f "$QE_STAGE_DIR/bin/$base" ]; then
+              cp "$exe" "$QE_STAGE_DIR/bin/$base"
+            fi
+          done
+
+          if [ "${{ inputs.build_mode }}" = "pw" ] && [ ! -f "$QE_STAGE_DIR/bin/pw.x" ]; then
+            if [ -f "$QE_SRC_DIR/PW/src/pw.x" ]; then
+              cp "$QE_SRC_DIR/PW/src/pw.x" "$QE_STAGE_DIR/bin/pw.x"
+            fi
+          fi
+
+          echo "Staged executables:"
+          ls -la "$QE_STAGE_DIR/bin"
+
+      - name: Import Apple signing certificate
+        if: ${{ inputs.sign }}
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/qe-sign
+          echo "$APPLE_CERTIFICATE_P12" | base64 --decode > /tmp/qe-sign/cert.p12
+          security create-keychain -p "" qe-build.keychain
+          security default-keychain -s qe-build.keychain
+          security unlock-keychain -p "" qe-build.keychain
+          security import /tmp/qe-sign/cert.p12 -k qe-build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" qe-build.keychain
+          rm -f /tmp/qe-sign/cert.p12
+
+      - name: Code sign QE executables
+        if: ${{ inputs.sign }}
+        env:
+          SIGNING_IDENTITY: "Developer ID Application: ${{ secrets.DEVELOPER_NAME }} (${{ secrets.APPLE_TEAM_ID }})"
+        run: |
+          set -euo pipefail
+          find "$QE_STAGE_DIR/bin" -maxdepth 1 -name "*.x" -type f | sort | while read -r exe; do
+            codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$exe"
+            codesign --verify --verbose "$exe"
+          done
+
+      - name: Create distribution zip
+        run: |
+          set -euo pipefail
+          ZIP_NAME="qe-${QE_SEMVER}-macos-arm64-openmp.zip"
+          ZIP_PATH="$RUNNER_TEMP/$ZIP_NAME"
+          CHECKSUM_FILE="$RUNNER_TEMP/checksums.txt"
+
+          cd "$QE_STAGE_DIR"
+          zip -r "$ZIP_PATH" .
+
+          shasum -a 256 "$ZIP_PATH" > "$CHECKSUM_FILE"
+
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
+          echo "CHECKSUM_FILE=$CHECKSUM_FILE" >> "$GITHUB_ENV"
+
+      - name: Notarize release zip
+        if: ${{ inputs.sign }}
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.private_keys
+          key_file="$HOME/.private_keys/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"
+          printf '%s' "$APPLE_NOTARY_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          xcrun notarytool submit "$ZIP_PATH" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --key "$key_file" \
+            --wait
+          rm -f "$key_file"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ZIP_PATH }}
+          push-to-registry: false
+
+      - name: Determine release name
+        id: release_name
+        run: |
+          RELEASE_TAG='${{ inputs.release_tag }}'
+          if [ -z "$RELEASE_TAG" ]; then
+            DATE=$(date +%Y%m%d)
+            SHORT_SHA="${GITHUB_SHA::7}"
+            VARIANT="macos-arm64-openmp"
+
+            if [ "${{ inputs.build_mode }}" != "all" ]; then
+              VARIANT="$VARIANT-${{ inputs.build_mode }}"
+            fi
+
+            RELEASE_TAG="qe-${QE_SEMVER}-${VARIANT}-${DATE}-${SHORT_SHA}"
+          fi
+
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $RELEASE_TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_name.outputs.tag }}
+          name: ${{ steps.release_name.outputs.tag }}
+          draft: ${{ inputs.release_draft }}
+          files: |
+            ${{ env.ZIP_PATH }}
+            ${{ env.CHECKSUM_FILE }}
+          body: |
+            Quantum ESPRESSO 7.5 — macOS (arm64, Accelerate framework)
+
+            **Variant:** macos-arm64-openmp${{ inputs.build_mode != 'all' && format(' ({0})', inputs.build_mode) || '' }}
+            **Source:** ${{ github.repository }} @ ${{ github.sha }}
+            **Build date:** ${{ github.run_started_at }}
+
+            **Files**
+            - `${{ env.ZIP_NAME }}` (portable distribution)
+            - `checksums.txt` (SHA256)
+
+            **Notes**
+            - Serial (non-MPI) build with Apple Accelerate framework
+            - Built on macOS 14 (Sonoma) with Apple Silicon (arm64)
+            - Signing/notarization: ${{ inputs.sign && 'enabled' || 'disabled' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
