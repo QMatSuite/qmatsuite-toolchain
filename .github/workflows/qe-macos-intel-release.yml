@@ -1,4 +1,4 @@
-name: QE macOS Release Build
+name: QE macOS Intel Release Build
 
 on:
   workflow_dispatch:
@@ -34,8 +34,8 @@ permissions:
 
 jobs:
   build_stage:
-    name: Build and stage QE (macOS)
-    runs-on: macos-14
+    name: Build and stage QE (macOS Intel)
+    runs-on: macos-13
     defaults:
       run:
         shell: bash
@@ -50,7 +50,7 @@ jobs:
       - name: Set up build directories
         run: |
           set -euo pipefail
-          QE_CACHE_ROOT="$GITHUB_WORKSPACE/.cache/qe-macos-release"
+          QE_CACHE_ROOT="$GITHUB_WORKSPACE/.cache/qe-macos-intel-release"
           echo "QE_CACHE_ROOT=$QE_CACHE_ROOT" >> "$GITHUB_ENV"
           echo "QE_SRC_DIR=$QE_CACHE_ROOT/q-e-src" >> "$GITHUB_ENV"
           echo "QE_STAGE_DIR=$QE_CACHE_ROOT/stage" >> "$GITHUB_ENV"
@@ -60,8 +60,8 @@ jobs:
         id: cache-stage
         uses: actions/cache@v4
         with:
-          path: .cache/qe-macos-release/stage
-          key: qe-macos-stage-${{ runner.os }}-${{ inputs.build_mode }}-${{ hashFiles('.github/workflows/qe-macos-release.yml', 'scripts/bundle_macos_dylibs.sh') }}
+          path: .cache/qe-macos-intel-release/stage
+          key: qe-macos-intel-stage-${{ runner.os }}-${{ inputs.build_mode }}-${{ hashFiles('.github/workflows/qe-macos-intel-release.yml', 'scripts/bundle_macos_dylibs.sh') }}
 
       - name: Cache hit summary
         run: |
@@ -318,14 +318,14 @@ jobs:
       - name: Upload staged QE distribution artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qe-macos-stage-${{ github.sha }}-${{ inputs.build_mode }}
+          name: qe-macos-intel-stage-${{ github.sha }}-${{ inputs.build_mode }}
           path: ${{ env.QE_STAGE_DIR }}/**
           retention-days: 7
 
   sign_package_attest_release:
     name: Sign, notarize, package, and release
     needs: build_stage
-    runs-on: macos-14
+    runs-on: macos-13
     defaults:
       run:
         shell: bash
@@ -338,7 +338,7 @@ jobs:
       - name: Download staged QE distribution artifact
         uses: actions/download-artifact@v4
         with:
-          name: qe-macos-stage-${{ github.sha }}-${{ inputs.build_mode }}
+          name: qe-macos-intel-stage-${{ github.sha }}-${{ inputs.build_mode }}
           path: ${{ runner.temp }}/qe-stage
 
       - name: Set stage directory env
@@ -385,7 +385,7 @@ jobs:
       - name: Create distribution zip
         run: |
           set -euo pipefail
-          ZIP_NAME="qe-${QE_SEMVER}-macos-arm64-openmp.zip"
+          ZIP_NAME="qe-${QE_SEMVER}-macos-x86_64-openmp.zip"
           ZIP_PATH="$RUNNER_TEMP/$ZIP_NAME"
           CHECKSUM_FILE="$RUNNER_TEMP/checksums.txt"
 
@@ -437,7 +437,7 @@ jobs:
           if [ -z "$RELEASE_TAG" ]; then
             DATE=$(date +%Y%m%d)
             SHORT_SHA="${GITHUB_SHA::7}"
-            VARIANT="macos-arm64-openmp"
+            VARIANT="macos-x86_64-openmp"
 
             if [ "${{ inputs.build_mode }}" != "all" ]; then
               VARIANT="$VARIANT-${{ inputs.build_mode }}"
@@ -460,9 +460,9 @@ jobs:
             ${{ env.ZIP_PATH }}
             ${{ env.CHECKSUM_FILE }}
           body: |
-            Quantum ESPRESSO 7.5 — macOS (arm64, Accelerate framework)
+            Quantum ESPRESSO 7.5 — macOS (x86_64, Accelerate framework)
 
-            **Variant:** macos-arm64-openmp${{ inputs.build_mode != 'all' && format(' ({0})', inputs.build_mode) || '' }}
+            **Variant:** macos-x86_64-openmp${{ inputs.build_mode != 'all' && format(' ({0})', inputs.build_mode) || '' }}
             **Source:** ${{ github.repository }} @ ${{ github.sha }}
             **Build date:** ${{ github.run_started_at }}
 
@@ -473,7 +473,7 @@ jobs:
             **Notes**
             - Serial (non-MPI) build with Apple Accelerate framework
             - Bundles non-system dylibs under `lib/` and rewrites runtime paths to `@executable_path/../lib`
-            - Built on macOS 14 (Sonoma) with Apple Silicon (arm64)
+            - Built on macOS 13 (Ventura) with Intel (x86_64)
             - Signing/notarization: ${{ inputs.sign && 'enabled' || 'disabled' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
