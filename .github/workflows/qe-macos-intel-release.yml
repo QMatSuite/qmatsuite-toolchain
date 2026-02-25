@@ -35,7 +35,7 @@ permissions:
 jobs:
   build_stage:
     name: Build and stage QE (macOS Intel)
-    runs-on: macos-13
+    runs-on: macos-15-intel
     defaults:
       run:
         shell: bash
@@ -325,7 +325,7 @@ jobs:
   sign_package_attest_release:
     name: Sign, notarize, package, and release
     needs: build_stage
-    runs-on: macos-13
+    runs-on: macos-15-intel
     defaults:
       run:
         shell: bash
@@ -473,7 +473,7 @@ jobs:
             **Notes**
             - Serial (non-MPI) build with Apple Accelerate framework
             - Bundles non-system dylibs under `lib/` and rewrites runtime paths to `@executable_path/../lib`
-            - Built on macOS 13 (Ventura) with Intel (x86_64)
+            - Built on macOS 15 (Sequoia) with Intel (x86_64)
             - Signing/notarization: ${{ inputs.sign && 'enabled' || 'disabled' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
